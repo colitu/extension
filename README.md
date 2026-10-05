@@ -1,7 +1,7 @@
 # Colitu VPN for Chrome and Firefox
 
-[![Build](https://img.shields.io/github/actions/workflow/status/colitu/colitu-extension/ci.yml?branch=main&style=flat-square&label=build&labelColor=101014)](https://github.com/colitu/colitu-extension/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/colitu/colitu-extension?style=flat-square&labelColor=101014&color=7c6cff)](https://github.com/colitu/colitu-extension/releases/latest)
+[![Build](https://img.shields.io/github/actions/workflow/status/colitu/extension/ci.yml?branch=main&style=flat-square&label=build&labelColor=101014)](https://github.com/colitu/extension/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/colitu/extension?style=flat-square&labelColor=101014&color=7c6cff)](https://github.com/colitu/extension/releases/latest)
 [![License](https://img.shields.io/badge/license-GPL--3.0-7c6cff?style=flat-square&labelColor=101014)](LICENSE)
 [![Colitu Network](https://img.shields.io/endpoint?url=https://status.colitu.com/api/github-badge/network&style=flat-square)](https://status.colitu.com)
 
@@ -116,7 +116,7 @@ to `dist-dev/` and is never published.
 
 ## Related repositories
 
-- [colitu/colitu-windows](https://github.com/colitu/colitu-windows) · [colitu/colitu-android](https://github.com/colitu/colitu-android) · [colitu/colitu-linux](https://github.com/colitu/colitu-linux)
+- [colitu/windows](https://github.com/colitu/windows) · [colitu/android](https://github.com/colitu/android) · [colitu/linux](https://github.com/colitu/linux)
 
 Security reports: [SECURITY.md](SECURITY.md). Contributions: [CONTRIBUTING.md](CONTRIBUTING.md).
 

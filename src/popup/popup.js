@@ -19,7 +19,7 @@ const LINKS = {
   pricing: () => `${WEB_BASE}/${language()}/pricing?utm_source=extension`,
   help: () => `https://docs.colitu.com/${language()}/browser-extension`,
   privacy: () => `${WEB_BASE}/${language()}/legal/privacy`,
-  source: () => "https://github.com/colitu/colitu-extension",
+  source: () => "https://github.com/colitu/extension",
   apps: () => `${WEB_BASE}/${language()}/download?utm_source=extension`,
 };
 

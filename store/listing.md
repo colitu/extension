@@ -11,8 +11,8 @@ the packages from the GitHub release of the same version
 | Category | Chrome: Privacy & Security · AMO: Privacy & Security |
 | Website | https://colitu.com/download/browser |
 | Support | https://colitu.com/support · support@colitu.com |
-| Privacy policy | https://colitu.com/legal/privacy (extension specifics: https://github.com/colitu/colitu-extension/blob/main/PRIVACY.md) |
-| Source | https://github.com/colitu/colitu-extension |
+| Privacy policy | https://colitu.com/legal/privacy (extension specifics: https://github.com/colitu/extension/blob/main/PRIVACY.md) |
+| Source | https://github.com/colitu/extension |
 | Images | `icon-128.png`, `promo-440x280.png` (small tile), `marquee-1400x560.png`, `screenshots/<lang>-1..4.png` (1280×800) |
 
 ## Short description (≤ 132 characters, from `_locales`)
@@ -32,7 +32,7 @@ Colitu VPN protects your browser in one click — no app to install.
 • No leaks around the proxy: if the server cannot be reached, pages do not open directly. WebRTC leak protection keeps video-call sites from seeing your real IP address.
 • Your rules: keep sites such as your bank outside the VPN, or send only the sites you choose through Colitu. Local network addresses always stay direct.
 • Same account as the Colitu apps for Windows, Android, Linux and iOS. The free plan includes 10 GB every month; Premium has no limit.
-• Open source (GPL-3.0): github.com/colitu/colitu-extension. No analytics, no ads, no access to page content.
+• Open source (GPL-3.0): github.com/colitu/extension. No analytics, no ads, no access to page content.
 
 The extension protects browser traffic only. To protect every app on your device, use the Colitu app: colitu.com/download
 
@@ -45,7 +45,7 @@ Colitu VPN защищает браузер в один клик — без ус�
 • Без утечек в обход прокси: если сервер недоступен, страницы не открываются напрямую. Защита от утечек WebRTC скрывает ваш настоящий IP от сайтов видеозвонков.
 • Ваши правила: оставьте банк и другие сайты вне VPN или пускайте через Colitu только выбранные сайты. Российские сайты (.ru, .su, .рф) по умолчанию открываются напрямую, как в приложениях.
 • Тот же аккаунт, что в приложениях Colitu для Windows, Android, Linux и iOS. Бесплатный тариф — 10 ГБ каждый месяц; на Premium ограничений нет.
-• Открытый код (GPL-3.0): github.com/colitu/colitu-extension. Без аналитики, без рекламы, без доступа к содержимому страниц.
+• Открытый код (GPL-3.0): github.com/colitu/extension. Без аналитики, без рекламы, без доступа к содержимому страниц.
 
 Расширение защищает только трафик браузера. Чтобы защитить все приложения на устройстве, установите приложение Colitu: colitu.com/download
 
@@ -58,7 +58,7 @@ Colitu VPN, uygulama kurmadan tarayıcınızı tek tıkla korur.
 • Proxy dışından sızıntı yok: sunucuya ulaşılamazsa sayfalar doğrudan açılmaz. WebRTC sızıntı koruması gerçek IP adresinizi görüntülü görüşme sitelerinden gizler.
 • Sizin kurallarınız: bankanız gibi siteleri VPN dışında tutun ya da yalnızca seçtiğiniz siteleri Colitu üzerinden açın. Yerel ağ adresleri her zaman doğrudan gider.
 • Windows, Android, Linux ve iOS'taki Colitu uygulamalarıyla aynı hesap. Ücretsiz plan her ay 10 GB içerir; Premium'da sınır yoktur.
-• Açık kaynak (GPL-3.0): github.com/colitu/colitu-extension. Analiz yok, reklam yok, sayfa içeriğine erişim yok.
+• Açık kaynak (GPL-3.0): github.com/colitu/extension. Analiz yok, reklam yok, sayfa içeriğine erişim yok.
 
 Eklenti yalnızca tarayıcı trafiğini korur. Cihazdaki tüm uygulamaları korumak için Colitu uygulamasını kullanın: colitu.com/download
 
