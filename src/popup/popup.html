@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Colitu VPN</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main id="app" aria-live="polite">
+    <!-- Sign in -->
+    <section class="view" id="view-login" hidden>
+      <div class="brand">
+        <img src="../icons/mark.png" alt="" class="brand-mark">
+        <h1>Colitu VPN</h1>
+        <p class="muted" data-i18n="tagline"></p>
+      </div>
+      <button class="btn primary wide" id="btn-link" type="button" data-i18n="signInWeb"></button>
+      <div class="divider"><span data-i18n="or"></span></div>
+      <form id="form-login" class="stack" novalidate>
+        <label class="field"><span data-i18n="email"></span><input id="in-email" type="email" autocomplete="username" required maxlength="254"></label>
+        <label class="field"><span data-i18n="password"></span><input id="in-password" type="password" autocomplete="current-password" required maxlength="256"></label>
+        <button class="btn secondary wide" type="submit" data-i18n="signIn"></button>
+      </form>
+      <p class="links"><a href="#" data-open="forgot" data-i18n="forgot"></a></p>
+      <p class="links muted"><span data-i18n="noAccount"></span> <a href="#" data-open="register" data-i18n="createAccount"></a></p>
+    </section>
+
+    <!-- Device link -->
+    <section class="view" id="view-link" hidden>
+      <div class="brand small">
+        <img src="../icons/mark.png" alt="" class="brand-mark">
+        <h1 data-i18n="linkTitle"></h1>
+      </div>
+      <p class="muted center" data-i18n="linkText"></p>
+      <p class="code" id="link-code"></p>
+      <p class="center muted pulse" data-i18n="linkWaiting"></p>
+      <button class="btn secondary wide" id="btn-link-open" type="button" data-i18n="linkReopen"></button>
+      <button class="btn ghost wide" id="btn-link-cancel" type="button" data-i18n="cancel"></button>
+    </section>
+
+    <!-- E-mail verification -->
+    <section class="view" id="view-verify" hidden>
+      <div class="brand small">
+        <img src="../icons/mark.png" alt="" class="brand-mark">
+        <h1 data-i18n="verifyTitle"></h1>
+      </div>
+      <p class="muted center" data-i18n="verifyText"></p>
+      <form id="form-verify" class="stack" novalidate>
+        <label class="field"><span data-i18n="verifyCode"></span><input id="in-code" inputmode="numeric" autocomplete="one-time-code" maxlength="12" required></label>
+        <button class="btn primary wide" type="submit" data-i18n="confirm"></button>
+      </form>
+      <button class="btn ghost wide" id="btn-verify-send" type="button" data-i18n="verifySend"></button>
+      <button class="btn ghost wide" id="btn-verify-cancel" type="button" data-i18n="signOut"></button>
+    </section>
+
+    <!-- Main -->
+    <section class="view" id="view-main" hidden>
+      <header class="bar">
+        <div class="bar-brand"><img src="../icons/mark.png" alt="" class="bar-mark"><span>Colitu</span></div>
+        <span class="chip" id="plan-chip"></span>
+        <button class="icon-btn" id="btn-settings" type="button" data-i18n-title="settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M19 7h1M4 17h3M13 17h7"/><circle cx="16" cy="7" r="2.5"/><circle cx="10" cy="17" r="2.5"/></svg>
+        </button>
+      </header>
+      <div class="hero">
+        <button class="power" id="btn-power" type="button" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>
+        </button>
+        <h2 id="status-title"></h2>
+        <p class="muted" id="status-sub"></p>
+        <p class="exit" id="exit-line" hidden></p>
+      </div>
+      <button class="server-row" id="btn-servers" type="button">
+        <img class="flag" id="current-flag" alt="">
+        <span class="server-text"><strong id="current-name"></strong><small id="current-sub"></small></span>
+        <span class="ping" id="current-ping"></span>
+        <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+      </button>
+      <div id="alerts"></div>
+      <footer class="foot" id="foot"></footer>
+    </section>
+
+    <!-- Servers -->
+    <section class="view" id="view-servers" hidden>
+      <header class="bar">
+        <button class="icon-btn" data-back type="button" data-i18n-title="back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg></button>
+        <h2 class="bar-title" data-i18n="servers"></h2>
+        <span class="bar-space"></span>
+      </header>
+      <input class="search" id="in-search" type="search" data-i18n-placeholder="search" autocomplete="off">
+      <ul class="list" id="server-list"></ul>
+    </section>
+
+    <!-- Settings -->
+    <section class="view" id="view-settings" hidden>
+      <header class="bar">
+        <button class="icon-btn" data-back type="button" data-i18n-title="back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg></button>
+        <h2 class="bar-title" data-i18n="settings"></h2>
+        <span class="bar-space"></span>
+      </header>
+      <div class="scroll">
+        <h3 data-i18n="account"></h3>
+        <div class="card">
+          <p class="acct-email" id="acct-email"></p>
+          <p class="muted" id="acct-plan"></p>
+          <div class="meter" id="acct-meter" hidden><span></span></div>
+          <p class="muted small" id="acct-traffic"></p>
+          <div class="row-buttons">
+            <a href="#" class="btn secondary" data-open="account" data-i18n="manage"></a>
+            <a href="#" class="btn secondary" data-open="pricing" data-i18n="upgrade" id="acct-upgrade"></a>
+          </div>
+        </div>
+
+        <h3 data-i18n="protection"></h3>
+        <div class="card">
+          <label class="toggle"><span><b data-i18n="webrtc"></b><small data-i18n="webrtcHint"></small></span><input type="checkbox" id="set-webrtc"></label>
+          <label class="toggle"><span><b data-i18n="ruDirect"></b><small data-i18n="ruDirectHint"></small></span><input type="checkbox" id="set-ru"></label>
+          <label class="toggle"><span><b data-i18n="autoConnect"></b></span><input type="checkbox" id="set-auto"></label>
+          <p class="muted small" id="incognito-hint" data-i18n="incognitoHint" hidden></p>
+        </div>
+
+        <h3 data-i18n="routing"></h3>
+        <div class="card">
+          <label class="radio"><input type="radio" name="mode" value="all" id="set-mode-all"><span data-i18n="modeAll"></span></label>
+          <label class="radio"><input type="radio" name="mode" value="only" id="set-mode-only"><span data-i18n="modeOnly"></span></label>
+          <label class="field" id="only-field"><span data-i18n="onlyList"></span><textarea id="set-only" rows="3" spellcheck="false" placeholder="youtube.com&#10;instagram.com"></textarea></label>
+          <label class="field"><span data-i18n="bypassList"></span><textarea id="set-bypass" rows="3" spellcheck="false" placeholder="bank.example"></textarea></label>
+          <p class="muted small" data-i18n="sitesHint"></p>
+          <button class="btn primary wide" id="btn-save-sites" type="button" data-i18n="save"></button>
+        </div>
+
+        <h3 data-i18n="language"></h3>
+        <div class="card">
+          <select id="set-language">
+            <option value="auto" data-i18n="langAuto"></option>
+            <option value="en">English</option>
+            <option value="ru">Русский</option>
+            <option value="tr">Türkçe</option>
+          </select>
+        </div>
+
+        <h3 data-i18n="about"></h3>
+        <div class="card links-card">
+          <p class="muted" id="about-version"></p>
+          <a href="#" data-open="help" data-i18n="help"></a>
+          <a href="#" data-open="privacy" data-i18n="privacy"></a>
+          <a href="#" data-open="source" data-i18n="source"></a>
+        </div>
+
+        <button class="btn danger wide" id="btn-signout" type="button" data-i18n="signOut"></button>
+        <p class="muted small center" data-i18n="signOutHint"></p>
+      </div>
+    </section>
+
+    <div class="toast" id="toast" role="status" hidden></div>
+    <div class="busy" id="busy" hidden><span></span></div>
+  </main>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

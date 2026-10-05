@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Node version
+        run: node --version
+      - name: Tests
+        run: npm test
+      - name: Build
+        run: npm run build
+      - name: Store packages must not contain test builds
+        run: |
+          grep -q '"https://api.colitu.com/api/v1"' dist/chrome/lib/target.js
+          grep -q '"https://api.colitu.com/api/v1"' dist/firefox/lib/target.js

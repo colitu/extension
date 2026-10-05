@@ -1,0 +1,52 @@
+name: Release
+
+# A tag like v1.0.0 builds the Chrome and Firefox packages (reproducible zips)
+# and attaches them with the source package and SHA256SUMS to a GitHub
+# release. Store uploads are done by hand from these files.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Version matches the tag
+        run: |
+          v=$(node -p "require('./package.json').version")
+          test "v$v" = "$GITHUB_REF_NAME"
+      - run: npm test
+      - run: npm run build
+      - run: cat dist/SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: packages
+          path: |
+            dist/*.zip
+            dist/SHA256SUMS
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: packages
+          path: dist
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Colitu VPN extension ${{ github.ref_name }}
+          files: dist/*
+          body: |
+            Colitu VPN for Chrome (and Edge, Brave, Opera, Yandex Browser) and Firefox 128+.
+            Install from the stores: https://colitu.com/download/browser · Changelog: https://docs.colitu.com/changelog/browser
+            `colitu-chrome-*.zip` is the Chrome Web Store package, `colitu-firefox-*.zip` the Firefox Add-ons package, `colitu-extension-*-source.zip` the source for the Firefox review. Checksums: `SHA256SUMS` (the build is reproducible: `npm run build` on this tag gives the same files).

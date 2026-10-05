@@ -1,0 +1,7 @@
+dist/
+node_modules/
+*.pem
+*.crx
+*.xpi
+.web-extension-id
+dist-dev/
