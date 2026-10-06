@@ -6,12 +6,15 @@ import { ext, TARGET } from "./lib/target.js";
 import { load, save, remove, settings as loadSettings } from "./lib/store.js";
 import * as api from "./lib/api.js";
 import * as proxy from "./lib/proxy.js";
-import { buildRules } from "./lib/routing.js";
+import { buildRules, parseSplitList, SPLIT_MODES, splitSettings } from "./lib/routing.js";
 import { resolveLanguage } from "./lib/i18n.js";
+import { pausedInfo } from "./lib/plan.js";
 
 const REFRESH_ALARM = "colitu-session";
 const LINK_ALARM = "colitu-link";
 const PLAN_ERRORS = new Set(["QUOTA_EXCEEDED", "ENTITLEMENT_INACTIVE", "ENTITLEMENT_EXPIRED"]);
+// Answers to a 2FA code after which the same challenge can be tried again.
+const MFA_RETRY = new Set(["MFA_INVALID_CODE", "RATE_LIMITED", "NETWORK"]);
 const LOAD_RANK = { low: 0, medium: 1, high: 2 };
 
 // --- listeners that must exist at the top level (MV3 wakes us for them) ---
@@ -91,9 +94,10 @@ async function startup() {
 
 async function state() {
   await ready;
-  const data = await load(["auth", "session", "connection", "status", "link", "pings"]);
+  const data = await load(["auth", "session", "connection", "status", "link", "pings", "entitlement", "paused"]);
   const s = await loadSettings();
   const auth = data.auth;
+  const mfa = await mfaPending();
   return {
     target: TARGET,
     version: api.version(),
@@ -104,8 +108,17 @@ async function state() {
     connection: data.connection || { on: false, serverId: "auto" },
     status: data.status || {},
     link: data.link && data.link.expiresAt > Date.now() ? { code: data.link.code, url: data.link.url, expiresAt: data.link.expiresAt } : null,
+    // The popup learns that a code is wanted, never the challenge token.
+    mfa: mfa ? { email: mfa.email, expiresAt: mfa.expiresAt } : null,
     pings: data.pings || {},
+    entitlement: data.entitlement || null,
+    // Set while the plan's device limit pauses this browser (DEVICE_OVER_LIMIT).
+    paused: auth && auth.deviceId && data.paused ? { limit: data.paused.limit, active: data.paused.active || [], deviceId: auth.deviceId } : null,
     settings: s,
+    split: (() => {
+      const sp = splitSettings(s);
+      return { mode: sp.mode, count: sp.count };
+    })(),
     blocked: await proxy.controlledByOther(),
     incognito: TARGET === "chrome" ? await ext.extension.isAllowedIncognitoAccess() : null,
   };
@@ -122,11 +135,26 @@ async function handle(msg) {
   switch (msg.cmd) {
     case "state":
       return state();
-    case "login":
-      await api.login(String(msg.email || "").trim(), String(msg.password || ""));
+    case "login": {
+      const email = String(msg.email || "").trim();
+      await clearMfa();
+      const challenge = await api.login(email, String(msg.password || ""));
+      if (challenge) {
+        await setMfa({ token: challenge.token, email, expiresAt: Date.now() + challenge.expiresIn * 1000 });
+        await setStatus({ error: null });
+        return state();
+      }
       await finishSignIn();
       return state();
+    }
+    case "login-mfa":
+      await loginMfa(String(msg.code || "").trim());
+      return state();
+    case "mfa-cancel":
+      await clearMfa();
+      return state();
     case "link-start":
+      await clearMfa();
       return startLink();
     case "link-cancel":
       await remove(["link"]);
@@ -163,6 +191,9 @@ async function handle(msg) {
     case "check-exit":
       await checkExit();
       return state();
+    case "activate-device":
+      await activateDevice();
+      return state();
     default:
       throw Object.assign(new Error("unknown command"), { code: "UNKNOWN_COMMAND" });
   }
@@ -183,6 +214,53 @@ async function finishSignIn() {
   await setStatus({ error: null });
   await refreshSession();
   ext.alarms.create(REFRESH_ALARM, { periodInMinutes: 30 });
+}
+
+// --- two-step verification ---------------------------------------------------
+//
+// The challenge token from /auth/login lives in this worker's memory and in
+// storage.session (memory only, gone when the browser closes; it outlives a
+// suspended service worker and a closed popup, so the user can fetch the code
+// from another app). It is never written to storage.local.
+
+let mfaMemory = null;
+const sessionArea = ext.storage && ext.storage.session;
+
+async function setMfa(value) {
+  mfaMemory = value;
+  if (sessionArea) await sessionArea.set({ mfa: value }).catch(() => {});
+}
+
+async function clearMfa() {
+  mfaMemory = null;
+  if (sessionArea) await sessionArea.remove("mfa").catch(() => {});
+}
+
+async function mfaPending() {
+  let value = mfaMemory;
+  if (!value && sessionArea) value = ((await sessionArea.get("mfa").catch(() => ({}))) || {}).mfa || null;
+  if (value && !(value.expiresAt > Date.now() && value.token)) {
+    await clearMfa();
+    value = null;
+  }
+  mfaMemory = value;
+  return value;
+}
+
+async function loginMfa(code) {
+  const pending = await mfaPending();
+  if (!pending) throw Object.assign(new Error("two-step sign-in expired"), { code: "MFA_TOKEN_EXPIRED" });
+  if (!code || code.length > 64) throw Object.assign(new Error("no code"), { code: "MFA_INVALID_CODE" });
+  try {
+    await api.loginMfa(pending.token, code, pending.email);
+  } catch (err) {
+    // A wrong code, a rate limit or a network failure keep the challenge;
+    // anything else (expired, used, unknown) means starting over.
+    if (!MFA_RETRY.has(err.code) && !(err.status >= 500)) await clearMfa();
+    throw err;
+  }
+  await clearMfa();
+  await finishSignIn();
 }
 
 // --- device link (sign in with colitu.com) ----------------------------------
@@ -258,6 +336,14 @@ async function refreshSession({ reapply = true } = {}) {
   sessionInFlight = (async () => {
     try {
       const s = await api.webSession();
+      // Plan details for the "plan ends soon" notice. Optional: only a paused
+      // device stops the refresh, anything else keeps the last answer.
+      let entitlement = null;
+      try {
+        entitlement = await api.entitlement();
+      } catch (err) {
+        if (err.code === "DEVICE_OVER_LIMIT") throw err;
+      }
       const session = {
         ticket: s.ticket,
         expiresAt: Date.parse(s.expires_at),
@@ -267,6 +353,8 @@ async function refreshSession({ reapply = true } = {}) {
         fetchedAt: Date.now(),
       };
       await save({ session });
+      if (entitlement && typeof entitlement === "object") await save({ entitlement });
+      await remove(["paused"]);
       proxy.setTicket(session.ticket);
       await setStatus({ error: null });
       // "Fastest server" needs pings; measure them now and then in the
@@ -279,6 +367,8 @@ async function refreshSession({ reapply = true } = {}) {
     } catch (err) {
       if (api.isTerminal(err) || err.code === "SIGNED_OUT") {
         await localSignOut("SESSION_EXPIRED");
+      } else if (err.code === "DEVICE_OVER_LIMIT") {
+        await pause(err);
       } else if (PLAN_ERRORS.has(err.code)) {
         await disconnect();
         const { session } = await load(["session"]);
@@ -311,8 +401,10 @@ function pickChain(servers, serverId, pings) {
 async function connect(serverId, { keepSession = false } = {}) {
   await ready;
   if (await proxy.controlledByOther()) throw Object.assign(new Error("proxy controlled by another extension"), { code: "PROXY_CONTROLLED" });
-  let { session, pings } = await load(["session", "pings"]);
-  if (!keepSession && (!session || !session.ticket || session.expiresAt - Date.now() < 30 * 60 * 1000)) {
+  let { session, pings, paused } = await load(["session", "pings", "paused"]);
+  // A paused browser asks the API again: it may have been activated elsewhere.
+  if (paused && keepSession) throw Object.assign(new Error("device paused"), { code: "DEVICE_OVER_LIMIT" });
+  if (!keepSession && (paused || !session || !session.ticket || session.expiresAt - Date.now() < 30 * 60 * 1000)) {
     session = await refreshSession({ reapply: false });
   }
   if (!session || !session.ticket) throw Object.assign(new Error("no session"), { code: "SIGNED_OUT" });
@@ -352,9 +444,41 @@ async function disconnect() {
   await paintBadge();
 }
 
+// pause: the plan's device limit stopped this browser (DEVICE_OVER_LIMIT).
+// The proxy goes off and the ticket is dropped, so nothing leaves through
+// Colitu or around it by surprise; the popup offers to move the slot here.
+async function pause(err) {
+  const { connection, paused: before } = await load(["connection", "paused"]);
+  const wasOn = Boolean((connection && connection.on) || (before && before.wasOn));
+  await disconnect();
+  const { session } = await load(["session"]);
+  if (session) await save({ session: { ...session, ticket: "" } });
+  proxy.setTicket("");
+  await save({ paused: { ...pausedInfo(err.body), wasOn, at: Date.now() } });
+  await setStatus({ error: "DEVICE_OVER_LIMIT" });
+}
+
+// activateDevice: "Use this browser instead". Then the session is fetched
+// again, and the connection comes back if the pause had turned it off.
+async function activateDevice() {
+  const auth = await api.getAuth();
+  if (!auth || !auth.deviceId) throw Object.assign(new Error("signed out"), { code: "SIGNED_OUT" });
+  try {
+    await api.activateDevice(auth.deviceId);
+  } catch (err) {
+    if (err.code === "DEVICE_OVER_LIMIT") await pause(err);
+    throw err;
+  }
+  const { paused, connection } = await load(["paused", "connection"]);
+  // refreshSession clears the pause when the API agrees, or sets it again.
+  await refreshSession({ reapply: false });
+  if (paused && paused.wasOn) await connect((connection && connection.serverId) || "auto");
+}
+
 async function localSignOut(reason) {
   await disconnect();
-  await remove(["auth", "session", "link", "pings", "pingsAt"]);
+  await clearMfa();
+  await remove(["auth", "session", "link", "pings", "pingsAt", "entitlement", "paused"]);
   await setStatus({ error: reason || null, exit: null });
 }
 
@@ -365,12 +489,14 @@ async function signOut() {
 }
 
 async function saveSettings(patch) {
-  const allowed = ["webrtc", "ruDirect", "autoConnect", "mode", "bypass", "only", "language"];
+  const allowed = ["webrtc", "ruDirect", "autoConnect", "split", "splitList", "language"];
   const current = await loadSettings();
   const next = { ...current };
   for (const key of allowed) if (key in patch) next[key] = patch[key];
-  next.bypass = String(next.bypass || "").slice(0, 20000);
-  next.only = String(next.only || "").slice(0, 20000);
+  next.split = SPLIT_MODES.includes(next.split) ? next.split : "off";
+  // Stored as the cleaned list; invalid entries are dropped (the popup
+  // refuses to save them in the first place).
+  next.splitList = parseSplitList(String(next.splitList || "").slice(0, 20000)).entries.join("\n");
   await save({ settings: next });
   const { connection } = await load(["connection"]);
   if (connection && connection.on) await connect(connection.serverId, { keepSession: true });

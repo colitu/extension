@@ -2,14 +2,19 @@
 // Everything from the network is inserted with textContent, never as HTML.
 
 import { ext } from "../lib/target.js";
-import { t, setLanguage, language, errorText } from "../lib/i18n.js";
+import { t, tn, setLanguage, language, errorText } from "../lib/i18n.js";
 import { WEB_BASE, APP_BASE } from "../lib/api.js";
+import { planInfo, noticeText, pausedText } from "../lib/plan.js";
+import { parseSplitList } from "../lib/routing.js";
 
 const $ = (id) => document.getElementById(id);
 let state = null;
 let view = "main";
 let busyCount = 0;
 let pingRequested = false;
+let mfaRecovery = false; // the 2FA view asks for a recovery code instead of the app code
+let mfaTimer = 0;
+let mfaSending = false;
 
 const LINKS = {
   forgot: () => `${APP_BASE}/forgot-password`,
@@ -169,12 +174,20 @@ function applyStatic() {
 }
 
 function show(name) {
+  const entering = view !== name;
   view = name;
   for (const el of document.querySelectorAll(".view")) el.hidden = el.id !== `view-${name}`;
   if (name === "servers") {
     $("in-search").value = "";
     renderServers();
     $("in-search").focus();
+  }
+  if (name === "mfa" && entering) {
+    mfaRecovery = false;
+    $("in-mfa-code").value = "";
+    $("in-mfa-recovery").value = "";
+    renderMfa();
+    mfaInput().focus();
   }
 }
 
@@ -187,6 +200,12 @@ function render() {
     show("link");
     return;
   }
+  if (!state.signedIn && state.mfa && !state.pendingDevice) {
+    show("mfa");
+    renderMfa();
+    return;
+  }
+  clearTimeout(mfaTimer);
   if (!state.signedIn) {
     const needsCode = state.pendingDevice && (view === "verify" || (state.status && state.status.error === "EMAIL_NOT_VERIFIED"));
     show(needsCode ? "verify" : "login");
@@ -194,11 +213,78 @@ function render() {
     if (err && err !== "EMAIL_NOT_VERIFIED") showLoginError(err);
     return;
   }
-  if (["login", "link", "verify"].includes(view)) view = "main";
+  if (["login", "link", "verify", "mfa"].includes(view)) view = "main";
+  // Paused by the device limit: the paused view replaces the main one.
+  if (state.paused && ["main", "servers"].includes(view)) view = "paused";
+  if (!state.paused && view === "paused") view = "main";
   renderMain();
+  renderPaused();
   renderSettings();
   if (view === "servers") renderServers();
   show(view);
+}
+
+function mfaInput() {
+  return mfaRecovery ? $("in-mfa-recovery") : $("in-mfa-code");
+}
+
+function renderMfa() {
+  $("mfa-text").textContent = mfaRecovery ? t("mfaRecoveryText") : t("mfaText");
+  $("mfa-email").textContent = (state && state.mfa && state.mfa.email) || "";
+  $("mfa-totp-field").hidden = mfaRecovery;
+  $("mfa-recovery-field").hidden = !mfaRecovery;
+  $("btn-mfa-toggle").textContent = mfaRecovery ? t("mfaUseApp") : t("mfaUseRecovery");
+  // The challenge expires on the server; go back to the password when it does.
+  clearTimeout(mfaTimer);
+  if (state && state.mfa) {
+    mfaTimer = setTimeout(mfaExpired, Math.max(0, state.mfa.expiresAt - Date.now()) + 500);
+  }
+}
+
+async function mfaExpired() {
+  if (view !== "mfa") return;
+  await refreshQuiet();
+  if (state && !state.mfa && !state.signedIn) {
+    toast(errorText("MFA_TOKEN_EXPIRED"), true);
+    $("in-password").focus();
+  }
+}
+
+// Digits only, at most six: also for "123 456" or "123-456" pasted from an
+// authenticator app or filled in by the browser.
+function cleanTotp(value) {
+  return String(value || "").replace(/\D+/g, "").slice(0, 6);
+}
+
+async function submitMfa() {
+  if (mfaSending) return;
+  const code = mfaRecovery ? $("in-mfa-recovery").value.trim() : cleanTotp($("in-mfa-code").value);
+  if (mfaRecovery ? !code : code.length !== 6) {
+    mfaInput().focus();
+    return;
+  }
+  mfaSending = true;
+  let ok;
+  try {
+    ok = await run("login-mfa", { code });
+  } finally {
+    mfaSending = false;
+  }
+  if (ok) {
+    $("in-mfa-code").value = "";
+    $("in-mfa-recovery").value = "";
+    if (ok.signedIn) $("toast").hidden = true;
+    return;
+  }
+  if (view === "mfa") {
+    // Wrong code or rate limited: stay and let the user try again.
+    const input = mfaInput();
+    input.value = "";
+    input.focus();
+  } else if (view === "login") {
+    // The challenge expired or was refused: the password is needed again.
+    $("in-password").focus();
+  }
 }
 
 let lastLoginError = "";
@@ -264,6 +350,11 @@ function renderMain() {
     $("current-ping").textContent = "";
   }
 
+  // Split tunneling: how many sites the rule covers; opens the settings.
+  const split = state.split || { mode: "off", count: 0 };
+  $("split-line").hidden = split.mode === "off";
+  $("split-line").textContent = split.mode === "off" ? "" : tn("splitOn", split.count);
+
   const alerts = $("alerts");
   alerts.replaceChildren();
   const alert = (text, bad, linkKey, linkText) => {
@@ -291,6 +382,9 @@ function renderMain() {
   // Only failures of the proxy itself: a single site that does not answer
   // also raises proxy errors (ERR_TUNNEL_CONNECTION_FAILED) and is not news.
   if (c.on && pe && Date.now() - pe.at < 60000 && /ERR_PROXY_CONNECTION_FAILED|ERR_PROXY_CERTIFICATE_INVALID|ERR_PROXY_AUTH/i.test(pe.error)) alert(t("proxyError"), true);
+  // Trial or plan ends within 3 days: what happens next.
+  const notice = noticeText(planInfo(plan, state.entitlement));
+  if (notice) alert(notice, false, "pricing", t("getPremium"));
 
   const foot = $("foot");
   foot.replaceChildren();
@@ -329,6 +423,10 @@ function renderMain() {
   });
   apps.append(hint, get);
   foot.append(apps);
+}
+
+function renderPaused() {
+  $("paused-text").textContent = state.paused ? pausedText(state.paused, state.paused.deviceId) : "";
 }
 
 function serverButton({ id, cc, title, sub, ms, tags, current }) {
@@ -412,11 +510,10 @@ function renderSettings() {
   $("set-webrtc").checked = s.webrtc;
   $("set-ru").checked = s.ruDirect;
   $("set-auto").checked = s.autoConnect;
-  $("set-mode-all").checked = s.mode !== "only";
-  $("set-mode-only").checked = s.mode === "only";
-  $("only-field").hidden = s.mode !== "only";
-  $("set-only").value = s.only;
-  $("set-bypass").value = s.bypass;
+  for (const mode of ["off", "bypass", "only"]) $(`set-split-${mode}`).checked = (s.split || "off") === mode;
+  $("split-field").hidden = (s.split || "off") === "off";
+  $("set-split-list").value = s.splitList || "";
+  $("split-invalid").hidden = true;
   $("set-language").value = s.language || "auto";
   $("about-version").textContent = t("version", { version: state.version });
   $("incognito-hint").hidden = state.incognito !== false;
@@ -451,6 +548,27 @@ function wire() {
       render();
     }
   });
+  $("form-mfa").addEventListener("submit", (e) => {
+    e.preventDefault();
+    submitMfa();
+  });
+  $("in-mfa-code").addEventListener("input", () => {
+    const input = $("in-mfa-code");
+    const clean = cleanTotp(input.value);
+    if (input.value !== clean) input.value = clean;
+    // Six digits typed, pasted or autofilled: send them right away.
+    if (clean.length === 6) submitMfa();
+  });
+  $("btn-mfa-toggle").addEventListener("click", () => {
+    mfaRecovery = !mfaRecovery;
+    renderMfa();
+    mfaInput().focus();
+  });
+  $("btn-mfa-cancel").addEventListener("click", async () => {
+    view = "login";
+    await run("mfa-cancel");
+    $("in-password").focus();
+  });
   $("btn-verify-send").addEventListener("click", async () => {
     if (await run("verify-send", { locale: language() })) toast(t("verifySent"));
   });
@@ -479,7 +597,12 @@ function wire() {
     }
   });
   $("btn-settings").addEventListener("click", () => show("settings"));
-  for (const b of document.querySelectorAll("[data-back]")) b.addEventListener("click", () => show("main"));
+  $("btn-settings-paused").addEventListener("click", () => show("settings"));
+  for (const b of document.querySelectorAll("[data-back]")) b.addEventListener("click", () => show(state && state.paused ? "paused" : "main"));
+  $("btn-activate").addEventListener("click", async () => {
+    const next = await run("activate-device");
+    if (next && !next.paused) toast(t("pausedActivated"));
+  });
   $("in-search").addEventListener("input", renderServers);
   for (const a of document.querySelectorAll("[data-open]")) {
     a.addEventListener("click", (e) => {
@@ -494,16 +617,36 @@ function wire() {
   toggle("set-webrtc", "webrtc");
   toggle("set-ru", "ruDirect");
   toggle("set-auto", "autoConnect");
-  for (const r of document.querySelectorAll('input[name="mode"]')) {
+  for (const r of document.querySelectorAll('input[name="split"]')) {
     r.addEventListener("change", () => {
-      $("only-field").hidden = $("set-mode-only").checked === false;
+      $("split-field").hidden = $("set-split-off").checked;
     });
   }
-  $("btn-save-sites").addEventListener("click", async () => {
-    const settings = { mode: $("set-mode-only").checked ? "only" : "all", only: $("set-only").value, bypass: $("set-bypass").value };
-    $("btn-save-sites").blur();
-    if (await run("settings", { settings })) toast(t("saved"));
+  $("set-split-list").addEventListener("input", () => {
+    $("split-invalid").hidden = true;
   });
+  $("btn-save-split").addEventListener("click", async () => {
+    const mode = document.querySelector('input[name="split"]:checked')?.value || "off";
+    const parsed = parseSplitList($("set-split-list").value);
+    const problem = $("split-invalid");
+    // Nothing invalid is saved silently: the user fixes the list first.
+    if (parsed.invalid.length) {
+      problem.textContent = t("splitInvalid", { list: parsed.invalid.join(", ") });
+      problem.hidden = false;
+      $("set-split-list").focus();
+      return;
+    }
+    if (mode !== "off" && !parsed.entries.length) {
+      problem.textContent = t("splitEmpty");
+      problem.hidden = false;
+      $("set-split-list").focus();
+      return;
+    }
+    problem.hidden = true;
+    $("btn-save-split").blur();
+    if (await run("settings", { settings: { split: mode, splitList: parsed.entries.join("\n") } })) toast(t("saved"));
+  });
+  $("split-line").addEventListener("click", () => show("settings"));
   $("set-language").addEventListener("change", async () => {
     $("set-language").blur();
     await run("settings", { settings: { language: $("set-language").value } });
@@ -515,7 +658,7 @@ function wire() {
   });
   ext.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
-    if (["auth", "session", "connection", "status", "link", "pings", "settings"].some((k) => k in changes)) refreshQuiet();
+    if (["auth", "session", "connection", "status", "link", "pings", "settings", "entitlement", "paused"].some((k) => k in changes)) refreshQuiet();
   });
 }
 

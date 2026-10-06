@@ -26,6 +26,23 @@
       <p class="links muted"><span data-i18n="noAccount"></span> <a href="#" data-open="register" data-i18n="createAccount"></a></p>
     </section>
 
+    <!-- Two-step verification -->
+    <section class="view" id="view-mfa" hidden>
+      <div class="brand small">
+        <img src="../icons/mark.png" alt="" class="brand-mark">
+        <h1 data-i18n="mfaTitle"></h1>
+      </div>
+      <p class="muted center" id="mfa-text"></p>
+      <p class="center acct-email" id="mfa-email"></p>
+      <form id="form-mfa" class="stack" novalidate>
+        <label class="field" id="mfa-totp-field"><span data-i18n="mfaCode"></span><input id="in-mfa-code" class="otp" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="000000" spellcheck="false" autocapitalize="off" autocorrect="off" aria-describedby="mfa-text"></label>
+        <label class="field" id="mfa-recovery-field" hidden><span data-i18n="mfaRecoveryCode"></span><input id="in-mfa-recovery" type="text" autocomplete="off" maxlength="64" spellcheck="false" autocapitalize="off" autocorrect="off" aria-describedby="mfa-text"></label>
+        <button class="btn primary wide" type="submit" data-i18n="confirm"></button>
+      </form>
+      <button class="btn ghost wide" id="btn-mfa-toggle" type="button"></button>
+      <button class="btn ghost wide" id="btn-mfa-cancel" type="button" data-i18n="cancel"></button>
+    </section>
+
     <!-- Device link -->
     <section class="view" id="view-link" hidden>
       <div class="brand small">
@@ -77,8 +94,26 @@
         <span class="ping" id="current-ping"></span>
         <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
       </button>
+      <button class="split-line" id="split-line" type="button" hidden></button>
       <div id="alerts"></div>
       <footer class="foot" id="foot"></footer>
+    </section>
+
+    <!-- Paused by the plan's device limit -->
+    <section class="view" id="view-paused" hidden>
+      <header class="bar">
+        <div class="bar-brand"><img src="../icons/mark.png" alt="" class="bar-mark"><span>Colitu</span></div>
+        <button class="icon-btn" id="btn-settings-paused" type="button" data-i18n-title="settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M19 7h1M4 17h3M13 17h7"/><circle cx="16" cy="7" r="2.5"/><circle cx="10" cy="17" r="2.5"/></svg>
+        </button>
+      </header>
+      <div class="hero">
+        <div class="paused-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 7v10M15 7v10"/></svg></div>
+        <h2 data-i18n="pausedTitle"></h2>
+        <p class="muted" id="paused-text"></p>
+      </div>
+      <button class="btn primary wide" id="btn-activate" type="button" data-i18n="pausedUseHere"></button>
+      <a href="#" class="btn secondary wide" data-open="pricing" data-i18n="getPremium"></a>
     </section>
 
     <!-- Servers -->
@@ -120,14 +155,17 @@
           <p class="muted small" id="incognito-hint" data-i18n="incognitoHint" hidden></p>
         </div>
 
-        <h3 data-i18n="routing"></h3>
-        <div class="card">
-          <label class="radio"><input type="radio" name="mode" value="all" id="set-mode-all"><span data-i18n="modeAll"></span></label>
-          <label class="radio"><input type="radio" name="mode" value="only" id="set-mode-only"><span data-i18n="modeOnly"></span></label>
-          <label class="field" id="only-field"><span data-i18n="onlyList"></span><textarea id="set-only" rows="3" spellcheck="false" placeholder="youtube.com&#10;instagram.com"></textarea></label>
-          <label class="field"><span data-i18n="bypassList"></span><textarea id="set-bypass" rows="3" spellcheck="false" placeholder="bank.example"></textarea></label>
-          <p class="muted small" data-i18n="sitesHint"></p>
-          <button class="btn primary wide" id="btn-save-sites" type="button" data-i18n="save"></button>
+        <h3 data-i18n="split" id="split-heading"></h3>
+        <div class="card" role="group" aria-labelledby="split-heading">
+          <label class="radio"><input type="radio" name="split" value="off" id="set-split-off"><span data-i18n="splitOff"></span></label>
+          <label class="radio"><input type="radio" name="split" value="bypass" id="set-split-bypass"><span data-i18n="splitBypass"></span></label>
+          <label class="radio"><input type="radio" name="split" value="only" id="set-split-only"><span data-i18n="splitOnly"></span></label>
+          <div class="stack" id="split-field">
+            <label class="field"><span data-i18n="splitList"></span><textarea id="set-split-list" rows="4" spellcheck="false" autocapitalize="off" placeholder="youtube.com&#10;bank.example&#10;203.0.113.0/24" aria-describedby="split-hint split-invalid"></textarea></label>
+            <p class="muted small" id="split-hint" data-i18n="splitHint"></p>
+            <p class="small field-error" id="split-invalid" role="alert" hidden></p>
+          </div>
+          <button class="btn primary wide" id="btn-save-split" type="button" data-i18n="save"></button>
         </div>
 
         <h3 data-i18n="language"></h3>

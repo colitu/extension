@@ -12,7 +12,7 @@ account, click once, and the browser's traffic leaves through a Colitu server.
 | | |
 |---|---|
 | Browsers | Chrome, Edge, Brave, Opera, Yandex Browser (Chrome Web Store) · Firefox 128+ (Firefox Add-ons) |
-| Version | `1.0.0` (`package.json`) |
+| Version | `1.1.0` (`package.json`) |
 | Manifest | V3 (Chrome service worker, Firefox event page) |
 | Languages | Russian, English, Turkish |
 | Dependencies | none at runtime; the build script uses only Node.js |
@@ -34,8 +34,10 @@ run the app transports (VLESS Reality, XHTTP, Hysteria2). Instead:
 
 1. The extension signs in like an app device (`/api/v1/auth/*`,
    `/api/v1/devices/register`, platform `chrome` or `firefox`) or through the
-   device link (a code you confirm on colitu.com). Tokens stay in extension
-   storage.
+   device link (a code you confirm on colitu.com). Accounts with two-step
+   verification (set up on colitu.com) also enter the authenticator-app code
+   or a recovery code (`/api/v1/auth/login/mfa`); the short-lived challenge is
+   kept in session memory only. Tokens stay in extension storage.
 2. It asks the panel for a **proxy ticket** and the server list
    (`POST /api/v1/webproxy/session`). A ticket is a short-lived (≤ 6 h),
    Ed25519-signed statement "this device of this user may use the proxy until
@@ -58,10 +60,38 @@ in and switch servers.
 - the Colitu proxy hosts themselves and local network addresses
   (`localhost`, `10/8`, `172.16/12`, `192.168/16`, `169.254/16`, `100.64/10`,
   `fc00::/7`, `fe80::/10`, `.local`, …);
-- your own bypass list, or everything except your list in “only these sites”
-  mode;
+- the sites on your split-tunneling list (“selected sites bypass the
+  proxy”), or every site that is not on it (“only selected sites use the
+  proxy”), see below;
 - `.ru`, `.su`, `.рф` sites while **Russian sites directly** is on (default,
   as in the apps) and the server is not in Russia.
+
+### Split tunneling
+
+Settings → **Split tunneling**: *Off* (default), *Selected sites bypass the
+proxy* or *Only selected sites use the proxy*, with one list of entries:
+
+- a domain matches itself and every subdomain (`example.com` covers
+  `www.example.com`; `*.example.com` is read as `example.com`); internationalised
+  names are stored in punycode;
+- an IPv4 or IPv6 address, or a CIDR range (`203.0.113.0/24`,
+  `2001:db8::/32`), matches sites opened by that address. Host names are
+  **not** resolved to check address rules: a DNS lookup would happen outside
+  the proxy;
+- invalid entries are refused with the list of what is wrong; at most 500
+  entries.
+
+The rule is part of the same routing function as everything else, so it is
+applied the same way in both browsers: in Chrome it is compiled into the PAC
+script set through `chrome.proxy.settings` (`DIRECT` for sites that skip the
+proxy), in Firefox `proxy.onRequest` returns `{type: "direct"}` for them.
+Order of the checks: local addresses and the Colitu proxy hosts (always
+direct) → bypass list → Colitu API (proxy with direct fallback) → “only”
+list → Russian sites directly → proxy. In “only” mode the user's list wins
+over *Russian sites directly*; “only” with an empty list counts as off. The
+popup shows “Split tunneling on: N sites” while a list is in effect, and
+saving re-applies the proxy setting at once. Settings from 1.0.0 (“all sites /
+only these sites” and the two site lists) are carried over.
 
 ### WebRTC
 

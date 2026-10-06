@@ -9,12 +9,19 @@ export const WEB_BASE = "https://colitu.com";
 export const APP_BASE = "https://app.colitu.com";
 
 export class ApiError extends Error {
-  constructor(status, code, message) {
+  constructor(status, code, message, body = null) {
     super(message || code || `HTTP ${status}`);
     this.status = status;
     this.code = code || (status ? `HTTP_${status}` : "NETWORK");
+    // The parsed error body, for answers that carry more than a code
+    // (MFA_REQUIRED brings the mfa_token). Never sent to the popup.
+    this.body = body;
   }
 }
+
+// Tells the API this client can answer a two-step verification challenge.
+// Without it, accounts with 2FA get MFA_REQUIRED_UPDATE_APP.
+const FEATURES = { "X-Colitu-Features": "mfa" };
 
 // Answers that mean the session is over and cannot come back.
 const TERMINAL = new Set(["AUTH_REFRESH_REUSED", "AUTH_INVALID_CREDENTIALS", "DEVICE_REVOKED", "DEVICE_NOT_FOUND", "DEVICE_TOKEN_MISMATCH"]);
@@ -23,8 +30,8 @@ export function version() {
   return ext.runtime.getManifest().version;
 }
 
-async function request(path, { method = "GET", body, token, deviceId, timeout = 20000 } = {}) {
-  const headers = { Accept: "application/json" };
+async function request(path, { method = "GET", body, token, deviceId, timeout = 20000, headers: extra } = {}) {
+  const headers = { Accept: "application/json", ...(extra || {}) };
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (token) headers.Authorization = `Bearer ${token}`;
   if (deviceId) headers["X-Device-ID"] = deviceId;
@@ -58,7 +65,7 @@ async function request(path, { method = "GET", body, token, deviceId, timeout = 
   }
   if (!res.ok) {
     const e = data && data.error;
-    throw new ApiError(res.status, e && e.code, e && e.message);
+    throw new ApiError(res.status, e && e.code, e && e.message, data);
   }
   return data;
 }
@@ -171,8 +178,31 @@ export function isTerminal(err) {
   return err instanceof ApiError && TERMINAL.has(err.code);
 }
 
+// login signs in with e-mail and password. It returns null when the session
+// is stored, or { token, expiresIn } when the account has two-step
+// verification on: the caller then asks for a code and calls loginMfa. The
+// challenge token is handed back to the caller and never stored here.
 export async function login(email, password) {
-  const tokens = await request("/auth/login", { method: "POST", body: { email, password } });
+  let tokens;
+  try {
+    tokens = await request("/auth/login", { method: "POST", body: { email, password }, headers: FEATURES });
+  } catch (err) {
+    const b = err instanceof ApiError && err.code === "MFA_REQUIRED" ? err.body : null;
+    if (b && typeof b.mfa_token === "string" && b.mfa_token) {
+      const ttl = Number(b.mfa_expires_in);
+      return { token: b.mfa_token, expiresIn: Number.isFinite(ttl) && ttl > 0 ? Math.min(ttl, 3600) : 300 };
+    }
+    throw err;
+  }
+  await save({ auth: tokensToAuth(tokens, { email }) });
+  return null;
+}
+
+// loginMfa finishes a sign-in that needed a second factor: a 6-digit code from
+// the authenticator app or a recovery code. The answer is the same as a
+// successful /auth/login.
+export async function loginMfa(mfaToken, code, email) {
+  const tokens = await request("/auth/login/mfa", { method: "POST", body: { mfa_token: mfaToken, code }, headers: FEATURES });
   await save({ auth: tokensToAuth(tokens, { email }) });
 }
 
@@ -232,6 +262,18 @@ export async function verifyEmail(code) {
 
 export async function webSession() {
   return authorized("/webproxy/session", { method: "POST" });
+}
+
+// entitlement: plan details beyond the session's plan (device count, when a
+// trial ends and what comes next).
+export async function entitlement() {
+  return authorized("/me/entitlement", { timeout: 10000 });
+}
+
+// activateDevice makes this browser the active device when the plan's device
+// limit paused it (DEVICE_OVER_LIMIT); another device is paused instead.
+export async function activateDevice(deviceId) {
+  return authorized(`/devices/${encodeURIComponent(deviceId)}/activate`, { method: "POST", body: {} });
 }
 
 // signOut frees the device slot (the extension is a device like an app) and

@@ -10,7 +10,8 @@ service as a whole is covered by the privacy policy at
   and the id of this browser as a device on your account;
 - a random device key generated at installation (it identifies this browser
   installation to your account, nothing else);
-- the server list, the current proxy ticket, measured pings;
+- the server list, the current proxy ticket, measured pings, your plan
+  details (when it ends, the next plan, the number of devices);
 - your settings (WebRTC protection, Russian sites, site lists, language).
 
 Nothing is synchronised to other browsers. Signing out removes the session,
@@ -20,7 +21,9 @@ devices.
 ## What is sent to Colitu
 
 - **Sign-in:** your e-mail and password (or the device-link code you confirm
-  on colitu.com) go to `api.colitu.com` over HTTPS.
+  on colitu.com) go to `api.colitu.com` over HTTPS; with two-step
+  verification on, so does the code from your authenticator app or a
+  recovery code.
 - **Device registration:** a device name such as “Chrome · Windows”, the
   platform (`chrome` or `firefox`), the extension version and the operating
   system name.

@@ -4,6 +4,28 @@ All notable changes to the Colitu VPN browser extension. Release notes in
 Russian, English and Turkish are also at
 <https://docs.colitu.com/changelog/browser>.
 
+## 1.1.0 — unreleased
+
+- Two-step verification at sign-in: accounts with 2FA (set up on colitu.com)
+  are asked for the 6-digit code from the authenticator app after the
+  password, or for a recovery code. The sign-in challenge is kept only in the
+  browser's session memory, never on disk.
+- Plan ending soon: when a trial or plan ends within 3 days, the popup says
+  when, which plan comes next (traffic and device limit, when the API sends
+  them) and, if the account has more devices than the next plan allows, that
+  only the most recently used device stays active.
+- Split tunneling (replaces the two site lists of 1.0.0, which are carried
+  over): Off, “Selected sites bypass the proxy” or “Only selected sites use
+  the proxy”, with one validated list of domains (subdomains included), IPv4
+  and IPv6 addresses and CIDR ranges. Applied through the existing PAC script
+  (Chrome) and `proxy.onRequest` (Firefox); the popup shows “Split tunneling
+  on: N sites”. In “only” mode a listed `.ru` site now uses the proxy even
+  with *Russian sites directly* on.
+- Paused by the device limit: when the plan's device limit pauses this
+  browser (`DEVICE_OVER_LIMIT`), the proxy is turned off and the popup shows
+  the active device, with "Use this browser instead" (moves the active slot
+  here and reconnects) and "Get Premium".
+
 ## 1.0.0 — 2026-10-05
 
 First release, for Chrome (and Chromium browsers: Edge, Brave, Opera, Yandex
