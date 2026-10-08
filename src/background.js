@@ -270,6 +270,7 @@ let linkLoop = null;
 async function startLink() {
   const start = await api.linkStart();
   const link = { code: start.code, url: start.url, pollToken: start.poll_token, expiresAt: Date.now() + (start.expires_in || 600) * 1000, interval: Math.max(2, start.interval || 3) };
+  if (!api.isColituUrl(link.url)) throw Object.assign(new Error("unexpected link URL"), { code: "ERROR" });
   await save({ link });
   ext.tabs.create({ url: link.url });
   // The popup closes when the tab opens, so polling happens here. The alarm
@@ -365,12 +366,17 @@ async function refreshSession({ reapply = true } = {}) {
       if (reapply && connection && connection.on) await connect(connection.serverId, { keepSession: true });
       return session;
     } catch (err) {
+      const { connection: before } = await load(["connection"]);
+      const wasOn = Boolean(before && before.on);
       if (api.isTerminal(err) || err.code === "SIGNED_OUT") {
         await localSignOut("SESSION_EXPIRED");
+        if (wasOn) await announceProtectionOff();
       } else if (err.code === "DEVICE_OVER_LIMIT") {
         await pause(err);
+        if (wasOn) await announceProtectionOff();
       } else if (PLAN_ERRORS.has(err.code)) {
         await disconnect();
+        if (wasOn) await announceProtectionOff();
         const { session } = await load(["session"]);
         if (session) await save({ session: { ...session, ticket: "", plan: null } });
         await setStatus({ error: err.code });
@@ -473,6 +479,17 @@ async function activateDevice() {
   // refreshSession clears the pause when the API agrees, or sets it again.
   await refreshSession({ reapply: false });
   if (paused && paused.wasOn) await connect((connection && connection.serverId) || "auto");
+}
+
+// announceProtectionOff: the proxy was removed without the user asking (plan
+// ended, session expired, device paused), so pages now load without Colitu.
+// The badge alone was easy to miss; open the status page in a tab once.
+async function announceProtectionOff() {
+  try {
+    await ext.tabs.create({ url: ext.runtime.getURL("popup/popup.html") });
+  } catch {
+    // A missing window (browser closing) must not break the error path.
+  }
 }
 
 async function localSignOut(reason) {

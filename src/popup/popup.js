@@ -3,7 +3,7 @@
 
 import { ext } from "../lib/target.js";
 import { t, tn, setLanguage, language, errorText } from "../lib/i18n.js";
-import { WEB_BASE, APP_BASE } from "../lib/api.js";
+import { WEB_BASE, APP_BASE, isColituUrl } from "../lib/api.js";
 import { planInfo, noticeText, pausedText } from "../lib/plan.js";
 import { parseSplitList } from "../lib/routing.js";
 
@@ -523,7 +523,7 @@ function renderSettings() {
 
 function wire() {
   $("btn-link").addEventListener("click", () => run("link-start"));
-  $("btn-link-open").addEventListener("click", () => state && state.link && ext.tabs.create({ url: state.link.url }));
+  $("btn-link-open").addEventListener("click", () => state && state.link && isColituUrl(state.link.url) && ext.tabs.create({ url: state.link.url }));
   $("btn-link-cancel").addEventListener("click", () => run("link-cancel"));
   $("form-login").addEventListener("submit", async (e) => {
     e.preventDefault();

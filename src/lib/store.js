@@ -16,7 +16,9 @@ export async function remove(keys) {
 
 export const DEFAULT_SETTINGS = Object.freeze({
   webrtc: true,
-  ruDirect: true,
+  // Off by default: a direct .ru/.su/.рф request shows those sites (and the
+  // ISP) the real IP address; users who need it turn it on in settings.
+  ruDirect: false,
   autoConnect: true,
   // Split tunneling: "off", "bypass" (listed sites skip Colitu) or "only"
   // (only listed sites use Colitu); splitList is the user's text.

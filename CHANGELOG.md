@@ -4,6 +4,17 @@ All notable changes to the Colitu VPN browser extension. Release notes in
 Russian, English and Turkish are also at
 <https://docs.colitu.com/changelog/browser>.
 
+## 1.1.1
+
+- Protection no longer goes off silently: when the plan ends, the session
+  expires or the device limit pauses this browser while Colitu is on, the
+  Colitu status page opens in a new tab (the badge alone was easy to miss).
+- "Russian sites directly" (.ru, .su, .рф without the VPN) is now off by
+  default for new installations, so those sites do not see the real IP
+  address unless the user turns it on.
+- Links handed out by the API (device linking) open only when they are https
+  addresses on colitu.com.
+
 ## 1.1.0 — unreleased
 
 - Two-step verification at sign-in: accounts with 2FA (set up on colitu.com)

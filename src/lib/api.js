@@ -8,6 +8,19 @@ export const API_BASE = BASE;
 export const WEB_BASE = "https://colitu.com";
 export const APP_BASE = "https://app.colitu.com";
 
+// isColituUrl: links the API hands out (device link, account pages) are only
+// opened when they are https on colitu.com, so a compromised or spoofed API
+// answer cannot open an arbitrary page in a new tab.
+export function isColituUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.username && !url.password &&
+      (url.hostname === "colitu.com" || url.hostname.endsWith(".colitu.com"));
+  } catch {
+    return false;
+  }
+}
+
 export class ApiError extends Error {
   constructor(status, code, message, body = null) {
     super(message || code || `HTTP ${status}`);
