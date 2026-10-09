@@ -4,6 +4,10 @@ All notable changes to the Colitu VPN browser extension. Release notes in
 Russian, English and Turkish are also at
 <https://docs.colitu.com/changelog/browser>.
 
+## 1.2.0
+
+- In-app messages in the popup for quota warnings and announcements.
+
 ## 1.1.2
 
 - Signing in from an unusual location can ask for a 6-digit code sent to
