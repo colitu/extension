@@ -229,10 +229,16 @@ function mfaInput() {
 }
 
 function renderMfa() {
-  $("mfa-text").textContent = mfaRecovery ? t("mfaRecoveryText") : t("mfaText");
+  // "email": a code mailed for an unfamiliar-country sign-in; there is no
+  // authenticator app and no recovery code to fall back to.
+  const emailCode = Boolean(state && state.mfa && state.mfa.method === "email");
+  if (emailCode) mfaRecovery = false;
+  $("mfa-title").textContent = emailCode ? t("loginEmailTitle") : t("mfaTitle");
+  $("mfa-text").textContent = emailCode ? t("loginEmailBody") : mfaRecovery ? t("mfaRecoveryText") : t("mfaText");
   $("mfa-email").textContent = (state && state.mfa && state.mfa.email) || "";
   $("mfa-totp-field").hidden = mfaRecovery;
   $("mfa-recovery-field").hidden = !mfaRecovery;
+  $("btn-mfa-toggle").hidden = emailCode;
   $("btn-mfa-toggle").textContent = mfaRecovery ? t("mfaUseApp") : t("mfaUseRecovery");
   // The challenge expires on the server; go back to the password when it does.
   clearTimeout(mfaTimer);

@@ -4,6 +4,13 @@ All notable changes to the Colitu VPN browser extension. Release notes in
 Russian, English and Turkish are also at
 <https://docs.colitu.com/changelog/browser>.
 
+## 1.1.2
+
+- Signing in from an unusual location can ask for a 6-digit code sent to
+  your e-mail; the popup shows a code step for it.
+- Clearer messages when a sign-up is refused: temporary e-mail addresses,
+  passwords found in known data breaches, too many sign-ups from one network.
+
 ## 1.1.1
 
 - Protection no longer goes off silently: when the plan ends, the session

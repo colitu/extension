@@ -38,10 +38,15 @@ beforeEach(() => {
 test("login announces 2FA support and returns the challenge without storing it", async () => {
   answers.push([403, { error: { code: "MFA_REQUIRED" }, mfa_token: "mfa-abc", mfa_expires_in: 300 }]);
   const challenge = await api.login("a@example.test", "pw");
-  assert.deepEqual(challenge, { token: "mfa-abc", expiresIn: 300 });
+  assert.deepEqual(challenge, { token: "mfa-abc", method: "totp", expiresIn: 300 });
   assert.equal(calls[0].url, api.API_BASE + "/auth/login");
   assert.equal(calls[0].init.headers["X-Colitu-Features"], "mfa");
   assert.deepEqual(stored, {});
+});
+
+test("an unfamiliar-country sign-in brings an e-mailed code (mfa_method email)", async () => {
+  answers.push([403, { error: { code: "MFA_REQUIRED" }, mfa_token: "mfa-em", mfa_method: "email", mfa_expires_in: 600 }]);
+  assert.deepEqual(await api.login("a@example.test", "pw"), { token: "mfa-em", method: "email", expiresIn: 600 });
 });
 
 test("login without 2FA stores the session as before", async () => {

@@ -109,7 +109,7 @@ async function state() {
     status: data.status || {},
     link: data.link && data.link.expiresAt > Date.now() ? { code: data.link.code, url: data.link.url, expiresAt: data.link.expiresAt } : null,
     // The popup learns that a code is wanted, never the challenge token.
-    mfa: mfa ? { email: mfa.email, expiresAt: mfa.expiresAt } : null,
+    mfa: mfa ? { email: mfa.email, method: mfa.method === "email" ? "email" : "totp", expiresAt: mfa.expiresAt } : null,
     pings: data.pings || {},
     entitlement: data.entitlement || null,
     // Set while the plan's device limit pauses this browser (DEVICE_OVER_LIMIT).
@@ -140,7 +140,7 @@ async function handle(msg) {
       await clearMfa();
       const challenge = await api.login(email, String(msg.password || ""));
       if (challenge) {
-        await setMfa({ token: challenge.token, email, expiresAt: Date.now() + challenge.expiresIn * 1000 });
+        await setMfa({ token: challenge.token, email, method: challenge.method, expiresAt: Date.now() + challenge.expiresIn * 1000 });
         await setStatus({ error: null });
         return state();
       }

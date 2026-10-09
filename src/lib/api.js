@@ -203,7 +203,10 @@ export async function login(email, password) {
     const b = err instanceof ApiError && err.code === "MFA_REQUIRED" ? err.body : null;
     if (b && typeof b.mfa_token === "string" && b.mfa_token) {
       const ttl = Number(b.mfa_expires_in);
-      return { token: b.mfa_token, expiresIn: Number.isFinite(ttl) && ttl > 0 ? Math.min(ttl, 3600) : 300 };
+      // mfa_method: "email" = a 6-digit sign-in code mailed because of an
+      // unfamiliar country (no 2FA on the account); missing/other = "totp".
+      const method = b.mfa_method === "email" ? "email" : "totp";
+      return { token: b.mfa_token, method, expiresIn: Number.isFinite(ttl) && ttl > 0 ? Math.min(ttl, 3600) : 300 };
     }
     throw err;
   }
