@@ -109,6 +109,41 @@ function toast(text, bad = false) {
   toastTimer = setTimeout(() => (el.hidden = true), 4200);
 }
 
+// --- notice banner -------------------------------------------------------------
+
+let notice = null;
+let noticeRequested = false;
+
+// Notice commands answer with the notice to show (or null), not with the
+// popup state, so they bypass send().
+async function noticeCall(cmd, extra = {}) {
+  try {
+    const res = await ext.runtime.sendMessage({ cmd, ...extra });
+    notice = res && res.ok && res.value ? res.value : null;
+  } catch {
+    notice = null;
+  }
+  renderNotice();
+}
+
+function renderNotice() {
+  const el = $("notice");
+  if (!notice) {
+    el.hidden = true;
+    return;
+  }
+  el.className = "notice " + notice.level;
+  $("notice-title").textContent = notice.title;
+  $("notice-title").hidden = !notice.title;
+  $("notice-body").textContent = notice.body;
+  $("notice-body").hidden = !notice.body;
+  const btn = $("notice-btn");
+  const link = notice.button && notice.url && isColituUrl(notice.url);
+  btn.hidden = !link;
+  btn.textContent = link ? notice.button : "";
+  el.hidden = false;
+}
+
 function open(key) {
   const make = LINKS[key];
   if (make) ext.tabs.create({ url: make() });
@@ -207,6 +242,8 @@ function render() {
   }
   clearTimeout(mfaTimer);
   if (!state.signedIn) {
+    notice = null;
+    noticeRequested = false;
     const needsCode = state.pendingDevice && (view === "verify" || (state.status && state.status.error === "EMAIL_NOT_VERIFIED"));
     show(needsCode ? "verify" : "login");
     const err = state.status && state.status.error;
@@ -218,6 +255,12 @@ function render() {
   if (state.paused && ["main", "servers"].includes(view)) view = "paused";
   if (!state.paused && view === "paused") view = "main";
   renderMain();
+  // The background fetches notices at most every 15 minutes; asking once per
+  // popup opening is enough.
+  if (!noticeRequested) {
+    noticeRequested = true;
+    noticeCall("notices");
+  }
   renderPaused();
   renderSettings();
   if (view === "servers") renderServers();
@@ -529,6 +572,14 @@ function renderSettings() {
 
 function wire() {
   $("btn-link").addEventListener("click", () => run("link-start"));
+  $("notice-btn").addEventListener("click", () => {
+    if (!notice || !notice.url || !isColituUrl(notice.url)) return;
+    ext.tabs.create({ url: notice.url });
+    ext.runtime.sendMessage({ cmd: "notice-click", id: notice.id }).catch(() => {});
+  });
+  $("notice-close").addEventListener("click", () => {
+    if (notice) noticeCall("notice-dismiss", { id: notice.id });
+  });
   $("btn-link-open").addEventListener("click", () => state && state.link && isColituUrl(state.link.url) && ext.tabs.create({ url: state.link.url }));
   $("btn-link-cancel").addEventListener("click", () => run("link-cancel"));
   $("form-login").addEventListener("submit", async (e) => {

@@ -145,6 +145,7 @@ const en = {
   "err.WEBPROXY_DISABLED": "The browser service is temporarily unavailable.",
   "err.NETWORK": "No connection to Colitu. Check your internet connection.",
   "err.ERROR": "Something went wrong. Try again.",
+  noticeClose: "Dismiss",
 };
 
 const ru = {
@@ -289,6 +290,7 @@ const ru = {
   "err.WEBPROXY_DISABLED": "Сервис для браузера временно недоступен.",
   "err.NETWORK": "Нет связи с Colitu. Проверьте подключение к интернету.",
   "err.ERROR": "Что-то пошло не так. Попробуйте ещё раз.",
+  noticeClose: "Закрыть",
 };
 
 const tr = {
@@ -433,6 +435,7 @@ const tr = {
   "err.WEBPROXY_DISABLED": "Tarayıcı hizmeti geçici olarak kullanılamıyor.",
   "err.NETWORK": "Colitu'ya bağlanılamıyor. İnternet bağlantınızı kontrol edin.",
   "err.ERROR": "Bir şeyler ters gitti. Tekrar deneyin.",
+  noticeClose: "Kapat",
 };
 
 export const dictionaries = { en, ru, tr };

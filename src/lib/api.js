@@ -286,6 +286,18 @@ export async function entitlement() {
   return authorized("/me/entitlement", { timeout: 10000 });
 }
 
+// notices: the in-app banners for this account (usage warnings, campaigns).
+// An older panel answers 404; the caller treats every failure as "none".
+export async function notices(lang) {
+  return authorized(`/client/notices?lang=${encodeURIComponent(lang)}`, { timeout: 10000 });
+}
+
+// noticeEvent reports "seen", "clicked" or "dismissed" for a notice id (the id
+// contains ":" and is URL-encoded). The answer is 204.
+export async function noticeEvent(id, event) {
+  await authorized(`/client/notices/${encodeURIComponent(id)}/events`, { method: "POST", body: { event }, timeout: 10000 });
+}
+
 // activateDevice makes this browser the active device when the plan's device
 // limit paused it (DEVICE_OVER_LIMIT); another device is paused instead.
 export async function activateDevice(deviceId) {

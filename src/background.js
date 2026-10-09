@@ -9,6 +9,7 @@ import * as proxy from "./lib/proxy.js";
 import { buildRules, parseSplitList, SPLIT_MODES, splitSettings } from "./lib/routing.js";
 import { resolveLanguage } from "./lib/i18n.js";
 import { pausedInfo } from "./lib/plan.js";
+import * as notices from "./lib/notices.js";
 
 const REFRESH_ALARM = "colitu-session";
 const LINK_ALARM = "colitu-link";
@@ -194,9 +195,38 @@ async function handle(msg) {
     case "activate-device":
       await activateDevice();
       return state();
+    case "notices":
+      return currentNotice();
+    case "notice-dismiss": {
+      const ctx = await noticeContext();
+      if (!ctx) return null;
+      await notices.dismiss({ id: String(msg.id || "").slice(0, 200), report: ctx.report });
+      return currentNotice();
+    }
+    case "notice-click": {
+      const ctx = await noticeContext();
+      if (ctx) await notices.clicked({ id: String(msg.id || "").slice(0, 200), report: ctx.report });
+      return null;
+    }
     default:
       throw Object.assign(new Error("unknown command"), { code: "UNKNOWN_COMMAND" });
   }
+}
+
+// --- notices -----------------------------------------------------------------
+
+async function noticeContext() {
+  const auth = await api.getAuth();
+  if (!auth || !auth.deviceId) return null;
+  const s = await loadSettings();
+  return { deviceId: auth.deviceId, lang: resolveLanguage(s.language), fetchList: api.notices, report: api.noticeEvent };
+}
+
+// The banner for the popup: at most one request per 15 minutes, and none at
+// all while signed out.
+async function currentNotice() {
+  const ctx = await noticeContext();
+  return ctx ? notices.current(ctx) : null;
 }
 
 async function finishSignIn() {
