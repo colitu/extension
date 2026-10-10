@@ -128,3 +128,28 @@ test("the PAC script is self-contained", () => {
   assert.equal(vm.runInContext(`FindProxyForURL("http://203.0.113.4/", "203.0.113.4")`, ctx), "DIRECT");
   assert.doesNotMatch(pac, /dnsResolve|isInNet|myIpAddress/);
 });
+
+// --- audit finding 2: a list that does not fit is refused, never cut -------------
+
+test("a list over the entry or character limit is reported as too long", async () => {
+  const { SPLIT_MAX, SPLIT_MAX_CHARS, splitListTooLong } = await import("../src/lib/routing.js");
+  const fits = Array.from({ length: SPLIT_MAX }, (_, i) => `s${i}.example`).join("\n");
+  assert.equal(splitListTooLong(parseSplitList(fits)), false);
+  const tooMany = fits + "\nextra.example";
+  const p = parseSplitList(tooMany);
+  assert.equal(p.overflow, true);
+  assert.equal(splitListTooLong(p), true);
+  const tooLong = Array.from({ length: SPLIT_MAX }, (_, i) => `${String(i).padStart(4, "0")}${"a".repeat(40)}.example.com`).join("\n");
+  assert.ok(tooLong.length > SPLIT_MAX_CHARS);
+  assert.equal(parseSplitList(tooLong).invalid.length, 0);
+  assert.equal(splitListTooLong(parseSplitList(tooLong)), true);
+});
+
+test("the popup and the background share the limit constant", async () => {
+  const { readFileSync } = await import("node:fs");
+  const popup = readFileSync(new URL("../src/popup/popup.js", import.meta.url), "utf8");
+  const background = readFileSync(new URL("../src/background.js", import.meta.url), "utf8");
+  assert.match(popup, /splitListTooLong/);
+  assert.match(background, /splitListTooLong/);
+  assert.doesNotMatch(background, /slice\(0, 20000\)/, "no silent truncation left");
+});

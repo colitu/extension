@@ -8,6 +8,13 @@ export const API_HOSTS = ["api.colitu.com"];
 // "only" (only listed sites use Colitu).
 export const SPLIT_MODES = ["off", "bypass", "only"];
 export const SPLIT_MAX = 500;
+// The cleaned list is stored and sent as one text. The popup and the
+// background share this limit; a longer list is refused (SPLIT_TOO_LONG),
+// never cut.
+export const SPLIT_MAX_CHARS = 20000;
+
+// BLOCK_PROXY never answers: used while the kill switch holds traffic back.
+export const BLOCK_PROXY = { host: "127.0.0.1", port: 9 };
 
 // ip4, ip6 and route are copied into the PAC script with
 // Function.prototype.toString: they may only use each other and nothing else
@@ -207,10 +214,15 @@ export function parseSplitList(text) {
   const nets = [];
   const invalid = [];
   const seen = new Set();
+  let overflow = false;
   for (const raw of String(text || "").split(/[\s,;]+/)) {
     const token = raw.trim();
     if (!token) continue;
-    if (sites.length + nets.length >= SPLIT_MAX) break;
+    if (sites.length + nets.length >= SPLIT_MAX) {
+      // Not silent: the caller refuses a list that does not fit.
+      overflow = true;
+      break;
+    }
     const net = parseNet(hostPart(token));
     if (net) {
       const key = formatNet(net);
@@ -230,7 +242,13 @@ export function parseSplitList(text) {
       invalid.push(token.slice(0, 80));
     }
   }
-  return { sites, nets, invalid, entries: [...sites, ...nets.map(formatNet)] };
+  return { sites, nets, invalid, overflow, entries: [...sites, ...nets.map(formatNet)] };
+}
+
+// splitListTooLong: true when the list cannot be stored whole (more than
+// SPLIT_MAX entries, or more than SPLIT_MAX_CHARS characters once cleaned).
+export function splitListTooLong(parsed) {
+  return Boolean(parsed.overflow) || parsed.entries.join("\n").length > SPLIT_MAX_CHARS;
 }
 
 // normalizeSites keeps the domain part of a list.
@@ -271,6 +289,27 @@ export function buildRules(settings, servers, serverCountry, apiHosts = API_HOST
     ruDirect: Boolean(settings.ruDirect) && serverCountry !== "RU",
     api: apiHosts,
   };
+}
+
+// blockRules: while the kill switch holds traffic back, only local addresses
+// and the Colitu API (needed to sign in or reconnect) go direct.
+export function blockRules(apiHosts = API_HOSTS) {
+  return { servers: [], bypass: [...apiHosts], mode: "all" };
+}
+
+// blockPacScript sends everything but local addresses and the API to a proxy
+// that never answers, so nothing leaves around Colitu.
+export function blockPacScript(apiHosts = API_HOSTS) {
+  return [
+    "var RULES = " + JSON.stringify(blockRules(apiHosts)) + ";",
+    "var ip4 = " + ip4.toString() + ";",
+    "var ip6 = " + ip6.toString() + ";",
+    "var route = " + route.toString() + ";",
+    "function FindProxyForURL(url, host) {",
+    "  if (route(RULES, host) === 'direct') return 'DIRECT';",
+    `  return 'PROXY ${BLOCK_PROXY.host}:${BLOCK_PROXY.port}';`,
+    "}",
+  ].join("\n");
 }
 
 // pacScript renders the rules into a Chrome PAC script. `proxies` is the

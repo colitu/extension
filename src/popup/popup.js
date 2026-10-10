@@ -5,7 +5,7 @@ import { ext } from "../lib/target.js";
 import { t, tn, setLanguage, language, errorText } from "../lib/i18n.js";
 import { WEB_BASE, APP_BASE, isColituUrl } from "../lib/api.js";
 import { planInfo, noticeText, pausedText } from "../lib/plan.js";
-import { parseSplitList } from "../lib/routing.js";
+import { parseSplitList, splitListTooLong } from "../lib/routing.js";
 
 const $ = (id) => document.getElementById(id);
 let state = null;
@@ -153,19 +153,20 @@ function open(key) {
 
 function countryName(cc) {
   try {
-    return new Intl.DisplayNames([language()], { type: "region" }).of(cc.toUpperCase()) || cc;
+    return new Intl.DisplayNames([language()], { type: "region" }).of(String(cc ?? "").toUpperCase()) || String(cc ?? "");
   } catch {
-    return cc;
+    return String(cc ?? "");
   }
 }
 
 function cityName(city) {
   const entry = CITY[String(city || "").toLowerCase()];
-  return entry ? entry[language()] || entry.en : city || "";
+  return entry ? entry[language()] || entry.en : String(city ?? "");
 }
 
 function flagSrc(cc) {
-  return /^[a-z]{2}$/i.test(cc || "") ? `../flags/${cc.toLowerCase()}.png` : "../icons/mark.png";
+  const code = String(cc ?? "");
+  return /^[a-z]{2}$/i.test(code) ? `../flags/${code.toLowerCase()}.png` : "../icons/mark.png";
 }
 
 function bytes(n) {
@@ -230,6 +231,7 @@ function render() {
   if (!state) return;
   setLanguage(state.settings.language);
   applyStatic();
+  $("block-banner").hidden = !(state.connection && state.connection.blocking);
   if (state.link) {
     $("link-code").textContent = state.link.code.replace(/^(.{4})(.{4})$/, "$1-$2");
     show("link");
@@ -364,7 +366,7 @@ function renderMain() {
   power.setAttribute("aria-pressed", String(c.on));
   power.setAttribute("aria-label", c.on ? t("connected") : t("tapToConnect"));
   const title = $("status-title");
-  title.textContent = c.on ? t("connected") : t("disconnected");
+  title.textContent = c.on ? t("connected") : c.blocking ? t("blockedTitle") : t("disconnected");
   title.className = c.on ? "status-on" : "";
   $("status-sub").textContent = c.on ? t("tapToDisconnect") : t("tapToConnect");
 
@@ -376,7 +378,7 @@ function renderMain() {
     const label = document.createElement("span");
     label.textContent = t("exitIp") + " ";
     const value = document.createElement("b");
-    if (ex && ex.ip) value.textContent = ex.colitu ? `${ex.ip} · ${ex.country || ""}` : `${ex.ip} · ${t("exitDirect")}`;
+    if (ex && ex.ip) value.textContent = ex.colitu ? `${ex.ip} · ${String(ex.country ?? "")}` : `${ex.ip} · ${t("exitDirect")}`;
     else value.textContent = t("checking");
     exit.append(label, value);
   }
@@ -498,7 +500,7 @@ function serverButton({ id, cc, title, sub, ms, tags, current }) {
     const wrap = document.createElement("span");
     wrap.className = "tags";
     for (const tag of tags) {
-      const label = TAGS[tag];
+      const label = Object.hasOwn(TAGS, tag) ? TAGS[tag] : null;
       if (!label) continue;
       const el = document.createElement("span");
       el.className = "tag";
@@ -559,6 +561,7 @@ function renderSettings() {
   $("set-webrtc").checked = s.webrtc;
   $("set-ru").checked = s.ruDirect;
   $("set-auto").checked = s.autoConnect;
+  $("set-kill").checked = Boolean(s.killSwitch);
   for (const mode of ["off", "bypass", "only"]) $(`set-split-${mode}`).checked = (s.split || "off") === mode;
   $("split-field").hidden = (s.split || "off") === "off";
   $("set-split-list").value = s.splitList || "";
@@ -674,6 +677,11 @@ function wire() {
   toggle("set-webrtc", "webrtc");
   toggle("set-ru", "ruDirect");
   toggle("set-auto", "autoConnect");
+  toggle("set-kill", "killSwitch");
+  $("block-allow").addEventListener("click", async (e) => {
+    e.preventDefault();
+    await run("disconnect");
+  });
   for (const r of document.querySelectorAll('input[name="split"]')) {
     r.addEventListener("change", () => {
       $("split-field").hidden = $("set-split-off").checked;
@@ -689,6 +697,12 @@ function wire() {
     // Nothing invalid is saved silently: the user fixes the list first.
     if (parsed.invalid.length) {
       problem.textContent = t("splitInvalid", { list: parsed.invalid.join(", ") });
+      problem.hidden = false;
+      $("set-split-list").focus();
+      return;
+    }
+    if (splitListTooLong(parsed)) {
+      problem.textContent = errorText("SPLIT_TOO_LONG");
       problem.hidden = false;
       $("set-split-list").focus();
       return;

@@ -6,8 +6,8 @@ import { ext, TARGET } from "./lib/target.js";
 import { load, save, remove, settings as loadSettings } from "./lib/store.js";
 import * as api from "./lib/api.js";
 import * as proxy from "./lib/proxy.js";
-import { buildRules, parseSplitList, SPLIT_MODES, splitSettings } from "./lib/routing.js";
-import { resolveLanguage } from "./lib/i18n.js";
+import { buildRules, parseSplitList, SPLIT_MAX_CHARS, SPLIT_MODES, splitListTooLong, splitSettings } from "./lib/routing.js";
+import { languages, resolveLanguage } from "./lib/i18n.js";
 import { pausedInfo } from "./lib/plan.js";
 import * as notices from "./lib/notices.js";
 
@@ -36,8 +36,13 @@ if (TARGET === "chrome") {
 } else {
   ext.proxy.onRequest.addListener(
     async (details) => {
-      await ready;
-      return proxy.firefoxDecision(details.url);
+      // Any failure closes the door: Firefox would otherwise connect directly.
+      try {
+        await ready;
+        return proxy.safeDecision(details.url);
+      } catch {
+        return proxy.unreachable();
+      }
     },
     { urls: ["<all_urls>"] },
   );
@@ -69,18 +74,28 @@ ext.runtime.onInstalled.addListener(() => {
 const ready = init();
 
 async function init() {
-  const { connection, session } = await load(["connection", "session"]);
-  if (connection && connection.on && session) {
-    proxy.remember(connection.rules, connection.chain, session.ticket);
+  try {
+    const { connection, session } = await load(["connection", "session"]);
+    if (connection && connection.on && session) {
+      proxy.remember(connection.rules, connection.chain, session.ticket);
+    } else if (connection && connection.blocking) {
+      proxy.rememberBlock(apiHosts());
+    }
+  } catch {
+    // Nothing stored that we can read: start disconnected.
   }
-  await paintBadge();
+  await paintBadge().catch(() => {});
+}
+
+function apiHosts() {
+  return [new URL(api.API_BASE).hostname];
 }
 
 async function startup() {
   await ready;
   const { connection } = await load(["connection"]);
   const s = await loadSettings();
-  if (!connection || !connection.on) return;
+  if (!connection || !(connection.on || connection.blocking)) return;
   if (!s.autoConnect) {
     await disconnect();
     return;
@@ -299,7 +314,7 @@ let linkLoop = null;
 
 async function startLink() {
   const start = await api.linkStart();
-  const link = { code: start.code, url: start.url, pollToken: start.poll_token, expiresAt: Date.now() + (start.expires_in || 600) * 1000, interval: Math.max(2, start.interval || 3) };
+  const link = { code: start.code, url: start.url, pollToken: start.poll_token, expiresAt: Date.now() + (start.expires_in || 600) * 1000, interval: api.linkInterval(start.interval) };
   if (!api.isColituUrl(link.url)) throw Object.assign(new Error("unexpected link URL"), { code: "ERROR" });
   await save({ link });
   ext.tabs.create({ url: link.url });
@@ -341,7 +356,7 @@ async function pollLink() {
             break;
           }
         }
-        await new Promise((r) => setTimeout(r, link.interval * 1000));
+        await new Promise((r) => setTimeout(r, api.linkInterval(link.interval) * 1000));
       }
     } finally {
       linkLoop = null;
@@ -379,7 +394,7 @@ async function refreshSession({ reapply = true } = {}) {
         ticket: s.ticket,
         expiresAt: Date.parse(s.expires_at),
         refreshAt: Date.now() + Math.max(60, s.refresh_after || 3600) * 1000,
-        servers: s.servers || [],
+        servers: api.sanitizeServers(s.servers),
         plan: s.plan || null,
         fetchedAt: Date.now(),
       };
@@ -393,19 +408,20 @@ async function refreshSession({ reapply = true } = {}) {
       const { pingsAt } = await load(["pingsAt"]);
       if (!pingsAt || Date.now() - pingsAt > 6 * 3600 * 1000) measurePings().catch(() => {});
       const { connection } = await load(["connection"]);
-      if (reapply && connection && connection.on) await connect(connection.serverId, { keepSession: true });
+      // Back from a drop: the kill switch lets go as soon as Colitu is on again.
+      if (reapply && connection && (connection.on || connection.blocking)) await connect(connection.serverId, { keepSession: true });
       return session;
     } catch (err) {
       const { connection: before } = await load(["connection"]);
       const wasOn = Boolean(before && before.on);
       if (api.isTerminal(err) || err.code === "SIGNED_OUT") {
-        await localSignOut("SESSION_EXPIRED");
+        await localSignOut("SESSION_EXPIRED", { block: true });
         if (wasOn) await announceProtectionOff();
       } else if (err.code === "DEVICE_OVER_LIMIT") {
         await pause(err);
         if (wasOn) await announceProtectionOff();
       } else if (PLAN_ERRORS.has(err.code)) {
-        await disconnect();
+        await disconnect({ block: true });
         if (wasOn) await announceProtectionOff();
         const { session } = await load(["session"]);
         if (session) await save({ session: { ...session, ticket: "", plan: null } });
@@ -460,7 +476,7 @@ async function connect(serverId, { keepSession = false } = {}) {
     connection: {
       on: true,
       serverId: serverId || "auto",
-      current: { id: chain[0].id, name: chain[0].name, country: chain[0].country, city: chain[0].city },
+      current: { id: String(chain[0].id), name: String(chain[0].name ?? ""), country: String(chain[0].country ?? ""), city: String(chain[0].city ?? "") },
       chain: hops,
       rules,
       since: sameServer ? previous.since : Date.now(),
@@ -471,7 +487,22 @@ async function connect(serverId, { keepSession = false } = {}) {
   if (!sameServer) checkExit().catch(() => {});
 }
 
-async function disconnect() {
+// disconnect turns the proxy off. With block (the connection dropped by
+// itself, not by the user) and the kill switch on, it installs the blocking
+// proxy instead: nothing leaves around Colitu until the connection is back
+// (connect) or the user lets traffic out (a plain disconnect).
+async function disconnect({ block = false } = {}) {
+  if (block) {
+    const s = await loadSettings();
+    const { connection: before } = await load(["connection"]);
+    if (s.killSwitch && before && (before.on || before.blocking)) {
+      await proxy.block(apiHosts());
+      await save({ connection: { on: false, blocking: true, serverId: before.serverId || "auto" } });
+      await setStatus({ exit: null, proxyError: null });
+      await paintBadge();
+      return;
+    }
+  }
   await proxy.clear();
   await proxy.setWebRTC(false);
   const { connection } = await load(["connection"]);
@@ -486,7 +517,7 @@ async function disconnect() {
 async function pause(err) {
   const { connection, paused: before } = await load(["connection", "paused"]);
   const wasOn = Boolean((connection && connection.on) || (before && before.wasOn));
-  await disconnect();
+  await disconnect({ block: true });
   const { session } = await load(["session"]);
   if (session) await save({ session: { ...session, ticket: "" } });
   proxy.setTicket("");
@@ -522,8 +553,8 @@ async function announceProtectionOff() {
   }
 }
 
-async function localSignOut(reason) {
-  await disconnect();
+async function localSignOut(reason, { block = false } = {}) {
+  await disconnect({ block });
   await clearMfa();
   await remove(["auth", "session", "link", "pings", "pingsAt", "entitlement", "paused"]);
   await setStatus({ error: reason || null, exit: null });
@@ -535,18 +566,33 @@ async function signOut() {
   await localSignOut(null);
 }
 
+// Setting values are checked by type; anything else is ignored.
+const BOOLEAN_SETTINGS = ["webrtc", "ruDirect", "autoConnect", "killSwitch"];
+
 async function saveSettings(patch) {
-  const allowed = ["webrtc", "ruDirect", "autoConnect", "split", "splitList", "language"];
   const current = await loadSettings();
   const next = { ...current };
-  for (const key of allowed) if (key in patch) next[key] = patch[key];
+  for (const key of BOOLEAN_SETTINGS) if (key in patch) next[key] = Boolean(patch[key]);
+  if ("language" in patch) next.language = patch.language === "auto" || languages.includes(patch.language) ? patch.language : "auto";
+  if ("split" in patch) next.split = SPLIT_MODES.includes(patch.split) ? patch.split : "off";
+  if ("splitList" in patch && typeof patch.splitList === "string") next.splitList = patch.splitList;
   next.split = SPLIT_MODES.includes(next.split) ? next.split : "off";
-  // Stored as the cleaned list; invalid entries are dropped (the popup
-  // refuses to save them in the first place).
-  next.splitList = parseSplitList(String(next.splitList || "").slice(0, 20000)).entries.join("\n");
+  if (typeof next.splitList !== "string") next.splitList = "";
+  // Stored as the cleaned list. Invalid entries are dropped (the popup refuses
+  // to save them in the first place), but a list that does not fit is refused
+  // as a whole: cutting it would send the cut sites around the proxy.
+  if (next.splitList.length > 1 << 20) throw Object.assign(new Error("split list too long"), { code: "SPLIT_TOO_LONG" });
+  const parsed = parseSplitList(next.splitList);
+  if (splitListTooLong(parsed)) throw Object.assign(new Error("split list too long"), { code: "SPLIT_TOO_LONG" });
+  next.splitList = parsed.entries.join("\n");
   await save({ settings: next });
   const { connection } = await load(["connection"]);
-  if (connection && connection.on) await connect(connection.serverId, { keepSession: true });
+  if (connection && connection.blocking && !next.killSwitch) {
+    // Turning the kill switch off lets traffic out again.
+    await disconnect();
+  } else if (connection && connection.on) {
+    await connect(connection.serverId, { keepSession: true });
+  }
 }
 
 // The API host goes through the proxy (with a direct fallback), so the
@@ -619,14 +665,17 @@ async function noteProxyError(error) {
 async function paintBadge() {
   const { connection } = await load(["connection"]);
   const on = Boolean(connection && connection.on);
+  const blocking = Boolean(connection && connection.blocking);
   const sizes = [16, 32, 48, 128];
   const path = Object.fromEntries(sizes.map((s) => [s, `icons/${on ? "on" : "off"}-${s}.png`]));
   await ext.action.setIcon({ path }).catch(() => {});
-  const cc = on && connection.current && connection.current.country ? connection.current.country.toUpperCase() : "";
-  await ext.action.setBadgeText({ text: cc });
-  if (cc) {
-    await ext.action.setBadgeBackgroundColor({ color: "#7c6cff" });
+  const cc = on && connection.current && connection.current.country ? String(connection.current.country).toUpperCase() : "";
+  // The kill switch holds traffic back: a red "!" instead of a country.
+  const text = blocking ? "!" : cc;
+  await ext.action.setBadgeText({ text });
+  if (text) {
+    await ext.action.setBadgeBackgroundColor({ color: blocking ? "#d93a3a" : "#7c6cff" });
     if (ext.action.setBadgeTextColor) await ext.action.setBadgeTextColor({ color: "#ffffff" }).catch(() => {});
   }
-  await ext.action.setTitle({ title: on ? `Colitu VPN — ${connection.current ? connection.current.name : ""}` : "Colitu VPN" });
+  await ext.action.setTitle({ title: on ? `Colitu VPN — ${connection.current ? String(connection.current.name ?? "") : ""}` : blocking ? "Colitu VPN — traffic blocked" : "Colitu VPN" });
 }

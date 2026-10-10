@@ -38,3 +38,38 @@ test("every key used in the popup is defined", () => {
   for (const m of js.matchAll(/\bt\("([^"]+)"/g)) used.add(m[1]);
   for (const key of used) assert.ok(key in dictionaries.en, key);
 });
+
+// --- audit finding 4 and the kill switch on Firefox -----------------------------
+
+const { safeDecision, unreachable, rememberBlock, isBlocking } = await import("../src/lib/proxy.js");
+
+test("Firefox fails closed: an error while deciding gives an unreachable proxy, never a direct connection", () => {
+  const servers = [{ host: "fi.example.test", port: 2083, country: "FI" }];
+  // btoa throws on a character outside Latin-1 in the ticket
+  remember(buildRules({}, servers, "FI"), [{ host: "fi.example.test", port: 2083 }], "bilet-Ж");
+  assert.throws(() => firefoxDecision("https://example.com/"));
+  const d = safeDecision("https://example.com/");
+  assert.deepEqual(d, unreachable());
+  assert.equal(d[0].type, "http");
+  assert.equal(d[0].host, "127.0.0.1");
+  assert.equal(d.some((p) => p.type === "direct"), false);
+  // a normal ticket still works through the same entry point
+  remember(buildRules({}, servers, "FI"), [{ host: "fi.example.test", port: 2083 }], "v1.ok");
+  assert.equal(safeDecision("https://example.com/")[0].host, "fi.example.test");
+  // an unparsable URL while connected is not sent direct either
+  assert.deepEqual(safeDecision("not a url"), unreachable());
+  remember(null, null, null);
+  assert.deepEqual(safeDecision("https://example.com/"), { type: "direct" }, "not connected: nothing to protect");
+});
+
+test("Firefox kill switch: only local addresses and the API go direct, the rest is unreachable", () => {
+  rememberBlock(["api.colitu.com"]);
+  assert.equal(isBlocking(), true);
+  assert.deepEqual(safeDecision("https://api.colitu.com/api/v1/me"), { type: "direct" });
+  assert.deepEqual(safeDecision("http://192.168.0.1/"), { type: "direct" });
+  assert.deepEqual(safeDecision("http://localhost:3000/"), { type: "direct" });
+  assert.deepEqual(safeDecision("https://example.com/"), unreachable());
+  assert.deepEqual(safeDecision("https://fi.example.test:2083/"), unreachable());
+  remember(null, null, null);
+  assert.equal(isBlocking(), false, "a normal connection ends the block");
+});

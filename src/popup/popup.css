@@ -126,6 +126,7 @@ textarea { resize: vertical; min-height: 64px; font-family: ui-monospace, SFMono
 .alert { padding: 10px 12px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line); font-size: 12.5px; color: var(--muted); }
 .alert.bad { border-color: rgba(255, 69, 58, 0.35); color: #ffb4ae; }
 .alert a { font-weight: 600; }
+.block-banner { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
 
 .notice { --notice: var(--muted); display: flex; align-items: flex-start; gap: 8px; padding: 10px 6px 10px 12px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line); border-color: color-mix(in srgb, var(--notice) 40%, transparent); }
 .notice.promo { --notice: var(--accent); }

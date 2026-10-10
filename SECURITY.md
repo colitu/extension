@@ -38,6 +38,17 @@ communication with the Colitu API.
 Out of scope: denial of service, social engineering, physical attacks and
 problems in the browsers themselves (report those to the browser vendor).
 
+Also out of scope: access to the extension's local storage. Like every
+browser extension, Colitu keeps its access and refresh tokens, the proxy
+ticket, the e-mail address and the last exit IP in the browser's
+`storage.local`, as plain text inside the browser profile. An attacker who can
+already read the profile folder or run code as the signed-in operating system
+user (malware, an unlocked device) is outside the extension's threat model;
+the browsers offer no safer storage for extensions. Signing out, or removing
+the device in your account, revokes the tokens. The two-step verification
+challenge is the exception: it is held in `storage.session` (memory only) and
+never written to disk.
+
 The machine-readable contact is at
 <https://colitu.com/.well-known/security.txt>. The Colitu Security Whitepaper
 (architecture, threat model, logging, known limitations) is at

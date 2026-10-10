@@ -20,6 +20,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
   // ISP) the real IP address; users who need it turn it on in settings.
   ruDirect: false,
   autoConnect: true,
+  // Kill switch: when the connection drops by itself (plan ended, signed
+  // out, device limit), block browser traffic instead of letting it out
+  // directly. Off by default.
+  killSwitch: false,
   // Split tunneling: "off", "bypass" (listed sites skip Colitu) or "only"
   // (only listed sites use Colitu); splitList is the user's text.
   split: "off",

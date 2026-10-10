@@ -8,6 +8,12 @@
 </head>
 <body>
   <main id="app" aria-live="polite">
+    <!-- Kill switch engaged: traffic is blocked until Colitu is back -->
+    <aside class="alert bad block-banner" id="block-banner" role="alert" hidden>
+      <strong data-i18n="blockedTitle"></strong>
+      <span data-i18n="blockedText"></span>
+      <a href="#" id="block-allow" data-i18n="blockedAllow"></a>
+    </aside>
     <!-- Sign in -->
     <section class="view" id="view-login" hidden>
       <div class="brand">
@@ -162,6 +168,7 @@
           <label class="toggle"><span><b data-i18n="webrtc"></b><small data-i18n="webrtcHint"></small></span><input type="checkbox" id="set-webrtc"></label>
           <label class="toggle"><span><b data-i18n="ruDirect"></b><small data-i18n="ruDirectHint"></small></span><input type="checkbox" id="set-ru"></label>
           <label class="toggle"><span><b data-i18n="autoConnect"></b></span><input type="checkbox" id="set-auto"></label>
+          <label class="toggle"><span><b data-i18n="killSwitch"></b><small data-i18n="killSwitchHint"></small></span><input type="checkbox" id="set-kill"></label>
           <p class="muted small" id="incognito-hint" data-i18n="incognitoHint" hidden></p>
         </div>
 

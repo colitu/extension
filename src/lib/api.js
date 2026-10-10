@@ -43,7 +43,41 @@ export function version() {
   return ext.runtime.getManifest().version;
 }
 
-async function request(path, { method = "GET", body, token, deviceId, timeout = 20000, headers: extra } = {}) {
+const MAX_BODY = 1 << 20;
+
+// readBody reads the answer as a stream and stops at MAX_BODY bytes, so an
+// oversized answer is never held in memory whole.
+async function readBody(res) {
+  const declared = Number(res.headers && res.headers.get && res.headers.get("content-length"));
+  if (declared > MAX_BODY) {
+    if (res.body && res.body.cancel) await res.body.cancel().catch(() => {});
+    throw new ApiError(res.status, "RESPONSE_TOO_LARGE");
+  }
+  if (!res.body || !res.body.getReader) {
+    const text = await res.text();
+    if (text.length > MAX_BODY) throw new ApiError(res.status, "RESPONSE_TOO_LARGE");
+    return text;
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let total = 0;
+  let text = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_BODY) {
+      await reader.cancel().catch(() => {});
+      throw new ApiError(res.status, "RESPONSE_TOO_LARGE");
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
+}
+
+// request calls the API. With withStatus the answer is { status, data } (for
+// endpoints where 202 and 200 mean different things).
+async function request(path, { method = "GET", body, token, deviceId, timeout = 20000, headers: extra, withStatus = false } = {}) {
   const headers = { Accept: "application/json", ...(extra || {}) };
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -66,8 +100,7 @@ async function request(path, { method = "GET", body, token, deviceId, timeout = 
   } finally {
     clearTimeout(timer);
   }
-  const text = await res.text();
-  if (text.length > 1 << 20) throw new ApiError(res.status, "RESPONSE_TOO_LARGE");
+  const text = await readBody(res);
   let data = null;
   if (text) {
     try {
@@ -80,7 +113,7 @@ async function request(path, { method = "GET", body, token, deviceId, timeout = 
     const e = data && data.error;
     throw new ApiError(res.status, e && e.code, e && e.message, data);
   }
-  return data;
+  return withStatus ? { status: res.status, data } : data;
 }
 
 function decodeExp(jwt) {
@@ -156,7 +189,25 @@ async function refreshTokens(auth) {
   if (!refreshing) {
     refreshing = (async () => {
       try {
-        const tokens = await request("/auth/refresh", { method: "POST", body: { refresh_token: auth.refresh }, deviceId: auth.deviceId });
+        // Another request may have refreshed already while this one waited
+        // for its 401: the stored session is newer than the caller's copy.
+        // Sending the old refresh token again would be a reuse, which the
+        // API answers with a terminal error.
+        const latest = await getAuth();
+        if (!latest || !latest.refresh) throw new ApiError(401, "SIGNED_OUT");
+        if (latest.refresh !== auth.refresh) return latest;
+        let tokens;
+        try {
+          tokens = await request("/auth/refresh", { method: "POST", body: { refresh_token: auth.refresh }, deviceId: auth.deviceId });
+        } catch (err) {
+          // A concurrent refresh in another context may have won in the
+          // meantime: the stored token changed, the session is still alive.
+          if (err instanceof ApiError && err.code === "AUTH_REFRESH_REUSED") {
+            const newer = await getAuth();
+            if (newer && newer.refresh && newer.refresh !== auth.refresh) return newer;
+          }
+          throw err;
+        }
         const current = await getAuth();
         // Signed out while the refresh was running: do not bring it back.
         if (!current || current.refresh !== auth.refresh) throw new ApiError(401, "SIGNED_OUT");
@@ -228,19 +279,46 @@ export async function linkStart() {
   return request("/auth/link/start", { method: "POST", body: { device_name: `${browserName()} · ${osName()}`.slice(0, 100), platform: TARGET } });
 }
 
+// linkInterval keeps the poll interval the API suggests in a sane range
+// (seconds): a huge value would stall the sign-in loop.
+export function linkInterval(value) {
+  const n = Number(value);
+  return Math.min(60, Math.max(2, Number.isFinite(n) && n > 0 ? n : 3));
+}
+
 export async function linkPoll(pollToken) {
-  const res = await fetch(API_BASE + "/auth/link/poll", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ poll_token: pollToken }),
-    credentials: "omit",
-    cache: "no-store",
-  });
-  if (res.status === 202) return null;
-  const data = await res.json().catch(() => null);
-  if (!res.ok) throw new ApiError(res.status, data && data.error && data.error.code);
+  const { status, data } = await request("/auth/link/poll", { method: "POST", body: { poll_token: pollToken }, timeout: 15000, withStatus: true });
+  if (status === 202) return null;
   await save({ auth: tokensToAuth(data, {}) });
   return true;
+}
+
+// sanitizeServers keeps the servers the API lists that are safe to use: the
+// host goes into the PAC chain and a URL, so it may only be a plain host name
+// or address, and the port must be a real port. Texts are made strings.
+export function sanitizeServers(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const s of list.slice(0, 200)) {
+    if (!s || typeof s !== "object") continue;
+    const host = typeof s.host === "string" ? s.host.trim().toLowerCase() : "";
+    const port = typeof s.port === "number" ? s.port : NaN;
+    if (!host || host.length > 253 || !/^[a-z0-9.-]+$/.test(host)) continue;
+    if (!Number.isInteger(port) || port < 1 || port > 65535) continue;
+    if (s.id === undefined || s.id === null || s.id === "") continue;
+    out.push({
+      ...s,
+      id: String(s.id).slice(0, 80),
+      name: String(s.name ?? "").slice(0, 120),
+      country: String(s.country ?? "").slice(0, 8),
+      city: String(s.city ?? "").slice(0, 80),
+      host,
+      port,
+      load: s.load === "medium" || s.load === "high" ? s.load : "low",
+      categories: Array.isArray(s.categories) ? s.categories.slice(0, 8).map((c) => String(c).slice(0, 40)) : undefined,
+    });
+  }
+  return out;
 }
 
 export async function registerDevice() {

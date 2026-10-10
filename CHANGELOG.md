@@ -4,6 +4,22 @@ All notable changes to the Colitu VPN browser extension. Release notes in
 Russian, English and Turkish are also at
 <https://docs.colitu.com/changelog/browser>.
 
+## 1.3.0
+
+- New setting "Block traffic if the connection drops" (kill switch, off by
+  default). When Colitu stops without your action (plan ended, signed out,
+  device limit), browser traffic is blocked instead of going out with your
+  real IP address, until Colitu is connected again or you allow traffic.
+- A token refresh running at the same time as another request no longer signs
+  you out (the refresh token was sent twice).
+- A split-tunneling list that is too long is refused with a message instead of
+  being cut silently.
+- Firefox: an internal error while routing a request now blocks the request
+  instead of letting it connect directly.
+- The server list from the API is checked (host name, port); API answers are
+  read with a 1 MB limit while streaming; the device-link poll interval has
+  an upper limit; setting values are type-checked.
+
 ## 1.2.0
 
 - In-app messages in the popup for quota warnings and announcements.
