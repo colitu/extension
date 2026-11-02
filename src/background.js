@@ -10,12 +10,16 @@ import { buildRules, parseSplitList, SPLIT_MAX_CHARS, SPLIT_MODES, splitListTooL
 import { languages, resolveLanguage } from "./lib/i18n.js";
 import { pausedInfo } from "./lib/plan.js";
 import * as notices from "./lib/notices.js";
-import { AUTO_RECHECK_MS, chooseAuto, measurementState } from "./lib/auto.js";
+import { AUTO_CHAIN, AUTO_RECHECK_MS, chooseAuto, measurementState } from "./lib/auto.js";
+import { displayPing, emptyReach, hiddenIds, recordRound, visible } from "./lib/reachability.js";
 import * as events from "./lib/events.js";
 import * as survey from "./lib/survey.js";
 import * as referral from "./lib/referral.js";
 import { displayName } from "./lib/servernames.js";
 import { pickSiteServer } from "./lib/site.js";
+import * as ac from "./lib/ac4-runtime.js";
+import * as ac4 from "./lib/ac4.js";
+import * as journalKind from "./lib/engine-journal.js";
 
 const REFRESH_ALARM = "colitu-session";
 // The server list comes with the ticket, which may be refreshed only every
@@ -24,6 +28,8 @@ const REFRESH_ALARM = "colitu-session";
 const SERVER_LIST_MAX_AGE_MS = 25 * 60 * 1000;
 const LINK_ALARM = "colitu-link";
 const LATENCY_ALARM = "colitu-latency";
+// AC4 whitelist mode: re-check every 5 minutes while it holds.
+const WHITELIST_ALARM = "colitu-whitelist";
 // While traffic is held back for a new proxy ticket (holdForTicket), the
 // ticket is asked for again after 15 s, 30 s, 1 min, 2 min, then every 5 min.
 const TICKET_ALARM = "colitu-ticket";
@@ -81,6 +87,7 @@ ext.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === LINK_ALARM) pollLink().catch(() => {});
   if (alarm.name === LATENCY_ALARM) periodic().catch(() => {});
   if (alarm.name === TICKET_ALARM) retryTicket().catch(() => {});
+  if (alarm.name === WHITELIST_ALARM) whitelistCheck("re-check", { recheck: true }).catch(() => {});
 });
 
 // Firefox: the optional data-collection permission can also be switched in
@@ -115,6 +122,7 @@ async function init() {
     await migrateTicket();
     // Sign-in tokens that older versions kept on disk move to session memory.
     await migrateAuth();
+    await ac.loadJournal();
     const { connection, session } = await load(["connection", "session"]);
     if (connection && connection.on && session && session.ticket) {
       proxy.remember(connection.rules, connection.chain, session.ticket);
@@ -233,10 +241,18 @@ async function startup() {
 
 async function state() {
   await ready;
-  const data = await load(["auth", "session", "connection", "status", "link", "pings", "entitlement", "paused", "latency", "lastGood"]);
+  const data = await load(["auth", "session", "connection", "status", "link", "pings", "entitlement", "paused", "latency", "lastGood", "reach"]);
   const s = await loadSettings();
   const auth = data.auth;
+  const keep = keepIds(data.connection);
+  const servers = (data.session && data.session.servers) || [];
+  const on = Boolean(data.connection && data.connection.on);
+  const nowMs = Date.now();
+  const pings = {};
+  for (const x of servers) pings[x.id] = displayPing(data.reach, x.id, { live: (data.latency || {})[x.id], connected: on, now: nowMs });
   const mfa = await mfaPending();
+  const acx = await ac.context();
+  const lang = resolveLanguage(s.language);
   return {
     target: TARGET,
     version: api.version(),
@@ -252,7 +268,13 @@ async function state() {
     link: data.link && data.link.expiresAt > Date.now() ? { code: data.link.code, url: data.link.url, expiresAt: data.link.expiresAt } : null,
     // The popup learns that a code is wanted, never the challenge token.
     mfa: mfa ? { email: mfa.email, method: mfa.method === "email" ? "email" : "totp", expiresAt: mfa.expiresAt } : null,
-    pings: data.pings || {},
+    // What each row shows: null = "— ms" (see reachability.js displayPing).
+    pings,
+    // Servers failing two ping rounds with the proxy off: not listed, not picked.
+    // Servers in Russia are also left out unless the extension speaks Russian or the network is in Russia (AC4 phase 3).
+    hidden: [...new Set([...hiddenIds(data.reach, servers.map((x) => x.id), keep), ...ac4.ruHiddenIds(servers, lang, acx.meta.country, keep)])],
+    // AC4 whitelist mode: the operator lets only allowed addresses through.
+    whitelist: acx.enabled ? { on: acx.whitelistOn, flagged: servers.filter((x) => x.whitelist_ok === true).length } : { on: false, flagged: 0 },
     entitlement: data.entitlement || null,
     // Set while the plan's device limit pauses this browser (DEVICE_OVER_LIMIT).
     paused: auth && auth.deviceId && data.paused ? { limit: data.paused.limit, active: data.paused.active || [], deviceId: auth.deviceId } : null,
@@ -262,7 +284,7 @@ async function state() {
       return { mode: sp.mode, count: sp.count };
     })(),
     // What "Automatic" would pick now (shown under its name).
-    auto: autoInfo(data.session, data.latency, data.lastGood),
+    auto: autoInfo(data.session, data.latency, data.lastGood, data.reach, keep, acx),
     // The statistics switch as it really works (Firefox: also needs the permission).
     statsActive: await statsEnabled(),
     blocked: await proxy.controlledByOther(),
@@ -648,22 +670,51 @@ async function siteConnect(msg, sender) {
   return { ok: on, reason, country, city: String(cur.city ?? server.city ?? ""), name: displayName(cur.name ?? server.name, lang, cur.country ?? server.country) };
 }
 
+// autoPick: what "Automatic" chooses. With features.ac_engine_4 on (and a model, or
+// whitelist mode) the Colitu LM orders the servers; otherwise, and whenever it names
+// none, the AC 3 rules of auto.js (lowest fresh latency, Russia excluded, failed ones
+// skipped). Servers that failed two ping rounds with the proxy off are not picked (AC4 phase 1).
+function autoPick(servers, latency, lastGood, reach, keep, acx, seed) {
+  const pool = visible(reach, servers, keep);
+  if (acx && acx.enabled) {
+    const plan = ac.decide(acx, pool, latency, { seed });
+    if (plan && plan.order.length) return { pick: pickFromOrder(plan.order, latency), plan };
+    if (plan) return { pick: chooseAuto(pool, latency, { lastGood }), plan };
+  }
+  return { pick: chooseAuto(pool, latency, { lastGood }), plan: null };
+}
+
+// pickFromOrder: chooseAuto's answer shape for an order the model gave.
+function pickFromOrder(order, latency, now = Date.now()) {
+  const rec = latency || {};
+  const ms = (x) => (measurementState(rec[x.id], now) === "ok" ? rec[x.id].ms : null);
+  const measured = order.filter((x) => ms(x) !== null).sort((a, b) => ms(a) - ms(b) || String(a.id).localeCompare(String(b.id)));
+  const best = measured[0] || null;
+  return { server: order[0], ms: ms(order[0]), best, bestMs: best ? ms(best) : null, chain: order.slice(0, AUTO_CHAIN) };
+}
+
 // pickChain: the servers to use, first one preferred. A chosen server is the
-// only entry; "auto" asks chooseAuto (lowest fresh latency, Russia excluded,
-// failed ones skipped) and keeps the next best as failover.
-function pickChain(servers, serverId, latency, lastGood) {
-  if (!servers.length) return { chain: [], pick: null };
+// only entry; "auto" asks autoPick and keeps the next best as failover.
+function pickChain(servers, serverId, latency, lastGood, reach, keep = [], acx = null, seed) {
+  if (!servers.length) return { chain: [], pick: null, plan: null };
   if (serverId && serverId !== "auto") {
     const s = servers.find((x) => x.id === serverId);
-    return { chain: s ? [s] : [], pick: null };
+    return { chain: s ? [s] : [], pick: null, plan: null };
   }
-  const pick = chooseAuto(servers, latency, { lastGood });
-  return { chain: pick ? pick.chain : [], pick };
+  const { pick, plan } = autoPick(servers, latency, lastGood, reach, keep, acx, seed);
+  return { chain: pick ? pick.chain : [], pick, plan };
+}
+
+// keepIds: the servers the list and "Automatic" never hide: the connected one,
+// the selected one and the one being connected to.
+function keepIds(connection, extra) {
+  const ids = [extra, connection && connection.serverId, connection && connection.current && connection.current.id];
+  return ids.filter((id) => id && id !== "auto").map(String);
 }
 
 // autoInfo: what "Automatic" would pick now, for the popup (no secrets).
-function autoInfo(session, latency, lastGood) {
-  const pick = session && session.servers && session.servers.length ? chooseAuto(session.servers, latency, { lastGood }) : null;
+function autoInfo(session, latency, lastGood, reach, keep = [], acx = null) {
+  const pick = session && session.servers && session.servers.length ? autoPick(session.servers, latency, lastGood, reach, keep, acx, acx ? acx.seed : undefined).pick : null;
   if (!pick) return null;
   const s = pick.server;
   return { id: String(s.id), name: String(s.name ?? ""), country: String(s.country ?? ""), city: String(s.city ?? ""), ms: pick.ms };
@@ -681,7 +732,7 @@ async function connect(serverId, { keepSession = false } = {}) {
   }
   if (!session || !session.ticket) throw Object.assign(new Error("no session"), { code: "SIGNED_OUT" });
   const auto = !serverId || serverId === "auto";
-  let { latency, lastGood } = await load(["latency", "lastGood"]);
+  let { latency, lastGood, reach } = await load(["latency", "lastGood", "reach"]);
   latency = latency || {};
   // First "Automatic" connect with nothing measured yet: measure now, but do
   // not make the user wait more than 3 s (results that arrive in time count).
@@ -689,7 +740,15 @@ async function connect(serverId, { keepSession = false } = {}) {
     await Promise.race([measureLatency().catch(() => {}), new Promise((r) => setTimeout(r, 3000))]);
     latency = { ...latency, ...liveLatency };
   }
-  const { chain, pick } = pickChain(session.servers, serverId, latency, lastGood);
+  const { connection: active } = await load(["connection"]);
+  const acx = auto ? await ac.context() : null;
+  const seed = acx && acx.enabled ? await ac.newSeed() : undefined;
+  const { chain, pick, plan } = pickChain(session.servers, serverId, latency, lastGood, reach, keepIds(active, serverId), acx, seed);
+  if (plan) {
+    ac.note(journalKind.DECISION, ac4.journalDecision(plan, { ac_engine_4: true }));
+    // No model yet or a stale one: AC 3 rules / the old model now, a fetch in the background.
+    if (!acx.model || plan.decision.stale) ac.refreshModelIfDue(Date.now(), { viaProxy: Boolean(proxy.current()) }).catch(() => {});
+  }
   if (!chain.length) {
     if (serverId !== "auto" && session.servers.length) return connect("auto", { keepSession });
     throw Object.assign(new Error("no servers"), { code: "NO_SERVERS" });
@@ -701,6 +760,8 @@ async function connect(serverId, { keepSession = false } = {}) {
     await proxy.apply(rules, hops, session.ticket);
   } catch (err) {
     track({ kind: "connect", node_id: chain[0].id, outcome: "fail", reason: "other", ms: performance.now() - started, first_try: true, mode: auto ? "auto" : "manual" });
+    ac.recordOutcome(chain[0].id, false, "other").catch(() => {});
+    noteConnectFailure().catch(() => {});
     throw err;
   }
   await proxy.setWebRTC(s.webrtc);
@@ -742,6 +803,8 @@ async function verifyConnection({ node, auto, started }) {
   if (result.ok) {
     await remove(["lastConnectFail"]);
     if (auto) await save({ lastGood: String(node) });
+    await remove(["acFailRun"]);
+    ac.recordOutcome(node, true).catch(() => {});
     track({ kind: "connect", node_id: node, outcome: "ok", ms, first_try: firstTry, mode: auto ? "auto" : "manual" });
     return;
   }
@@ -752,6 +815,8 @@ async function verifyConnection({ node, auto, started }) {
   // failed request; else the API answered around the proxy.
   const reason = pe && Date.now() - pe.at < 30000 ? events.mapReason(pe.error) : result.error ? events.mapReason(result.error) : "other";
   track({ kind: "connect", node_id: node, outcome: "fail", reason, ms, first_try: firstTry, mode: auto ? "auto" : "manual" });
+  ac.recordOutcome(node, false, reason).catch(() => {});
+  noteConnectFailure().catch(() => {});
 }
 
 // disconnect turns the proxy off. With block (the connection dropped by
@@ -823,7 +888,9 @@ async function announceProtectionOff() {
 async function localSignOut(reason, { block = false } = {}) {
   await disconnect({ block });
   await clearMfa();
-  await remove(["auth", "session", "link", "pings", "pingsAt", "latency", "lastGood", "entitlement", "paused", "survey", "referralCache", "networkToken", "lastConnectFail", "dropFor"]);
+  await remove(["auth", "session", "link", "pings", "pingsAt", "latency", "reach", "lastGood", "entitlement", "paused", "survey", "referralCache", "networkToken", "lastConnectFail", "dropFor", "ac4Meta", "acModel", "acHistory", "whitelist", "engineJournal", "acSeed", "acFailRun"]);
+  ac.journal.clear();
+  Promise.resolve(ext.alarms.clear(WHITELIST_ALARM)).catch(() => {});
   await events.clear();
   await setStatus({ error: reason || null, exit: null });
 }
@@ -939,7 +1006,7 @@ function measureLatency() {
   measuring = (async () => {
     try {
       await ready;
-      const { session, latency: old } = await load(["session", "latency"]);
+      const { session, latency: old, reach: oldReach } = await load(["session", "latency", "reach"]);
       if (!session || !session.servers || !session.servers.length) return;
       // Kill switch engaged: server hosts are blocked like everything else.
       if (proxy.isBlocking()) return;
@@ -950,9 +1017,14 @@ function measureLatency() {
       const next = {};
       for (const s of session.servers) if (old && old[s.id]) next[s.id] = old[s.id];
       liveLatency = {};
+      // Proxy off: the round decides reachability (AC4 phase 1), so a failed server gets one retry.
+      const vpnOff = !active;
+      const round = {};
       await Promise.all(
         targets.map(async (s) => {
-          const r = await pingServer(s);
+          let r = await pingServer(s);
+          if (vpnOff && r.ms === null) r = await pingServer(s);
+          round[s.id] = r.ms;
           const record = { ms: r.ms, at: Date.now() };
           next[s.id] = record;
           liveLatency[s.id] = record;
@@ -962,7 +1034,12 @@ function measureLatency() {
       );
       const pings = {};
       for (const [id, rec] of Object.entries(next)) if (measurementState(rec, Date.now()) !== "unknown") pings[id] = rec.ms;
-      await save({ latency: next, pings, pingsAt: Date.now() });
+      const reach = recordRound(oldReach || emptyReach(), round, { vpnOff, at: Date.now(), known: session.servers.map((x) => x.id) });
+      await save({ latency: next, pings, reach, pingsAt: Date.now() });
+      journalRound(round, reach, session.servers, vpnOff, oldReach);
+      // A proxy-off round in which most servers failed: perhaps the operator runs a whitelist.
+      const failedCount = Object.values(round).filter((ms) => !(typeof ms === "number" && ms > 0)).length;
+      if (vpnOff && Object.keys(round).length > 0 && failedCount * 2 > Object.keys(round).length) whitelistCheck("most servers unreachable with the VPN off").catch(() => {});
       await recheckAuto();
     } finally {
       measuring = null;
@@ -974,10 +1051,11 @@ function measureLatency() {
 // recheckAuto: "Automatic" is on and its server just failed to answer while
 // another one does: connect again, which picks the best one.
 async function recheckAuto() {
-  const { connection, session, latency, lastGood } = await load(["connection", "session", "latency", "lastGood"]);
+  const { connection, session, latency, lastGood, reach } = await load(["connection", "session", "latency", "lastGood", "reach"]);
   if (!connection || !connection.on || connection.serverId !== "auto" || !connection.current || !session || !session.ticket) return;
   if (measurementState((latency || {})[connection.current.id], Date.now()) !== "failed") return;
-  const pick = chooseAuto(session.servers, latency, { lastGood });
+  const acx = await ac.context();
+  const { pick } = autoPick(session.servers, latency, lastGood, reach, keepIds(connection), acx, acx.seed);
   if (pick && pick.ms !== null && pick.server.id !== connection.current.id) await connect("auto", { keepSession: true });
 }
 
@@ -986,8 +1064,87 @@ async function periodic() {
   const auth = await api.getAuth();
   if (!auth || !auth.deviceId) return;
   await ready;
+  // AC4: the rollout switch and the network's country first, then the model, then the ping round.
+  await refreshAc4().catch(() => {});
   await measureLatency().catch(() => {});
   await flushEvents().catch(() => {});
+}
+
+// --- Adaptive Connect 4 -------------------------------------------------------------
+
+// refreshAc4: reads GET /servers (switch, country, whitelist hosts) and fetches the model
+// when it is due. The switch going off ends whitelist mode.
+async function refreshAc4() {
+  const meta = await ac.refreshMeta();
+  if (meta.enabled !== true) {
+    const wl = await ac.readWhitelist();
+    if (wl.on) await ac.setWhitelist(false);
+    await Promise.resolve(ext.alarms.clear(WHITELIST_ALARM)).catch(() => {});
+    return;
+  }
+  await ac.refreshModelIfDue(Date.now(), { viaProxy: Boolean(proxy.current()) });
+  if ((await ac.readWhitelist()).on) await ensureAlarm(WHITELIST_ALARM, ac4.RECHECK_MS / 60000);
+}
+
+// journalRound: ping round summary and the servers hidden by the honest list.
+function journalRound(round, reach, servers, vpnOff, previous) {
+  const ids = Object.keys(round);
+  const failed = ids.filter((id) => !(typeof round[id] === "number" && round[id] > 0));
+  ac.note(journalKind.PING_ROUND, { vpn_off: vpnOff, servers: ids.length, failed: failed.length, suspect: Boolean(reach && reach.suspect) });
+  const all = servers.map((x) => x.id);
+  const hidden = [...hiddenIds(reach, all, [])];
+  const before = new Set([...hiddenIds(previous, all, [])]);
+  if (hidden.length !== before.size || hidden.some((id) => !before.has(id))) ac.note(journalKind.HIDDEN, { ids: hidden });
+}
+
+// noteConnectFailure: the second connection failure in a row starts a whitelist check.
+async function noteConnectFailure() {
+  const { acFailRun } = await load(["acFailRun"]);
+  const run = (typeof acFailRun === "number" ? acFailRun : 0) + 1;
+  await save({ acFailRun: run });
+  if (run >= 2) await whitelistCheck("two connection failures in a row", { afterFailures: true });
+}
+
+// whitelistCheck: one whitelist check (needs the proxy off: through it the probes would
+// measure the tunnel). On entering the mode the popup shows a notice and, after failed
+// connects with "Automatic" selected, the best whitelist server is tried. Never throws.
+async function whitelistCheck(reason, { afterFailures = false, recheck = false } = {}) {
+  try {
+    await ready;
+    const meta = await ac.readMeta();
+    if (meta.enabled !== true) return;
+    if (proxy.current() || proxy.isBlocking()) {
+      ac.note(journalKind.WHITELIST, { reason, skipped: "proxy_active" });
+      return;
+    }
+    const { session, latency } = await load(["session", "latency"]);
+    const servers = (session && session.servers) || [];
+    const rec = latency || {};
+    const pingOf = (x) => (measurementState(rec[x.id], Date.now()) === "ok" ? rec[x.id].ms : null);
+    const res = await ac.whitelistCheck({ reason, meta, servers, pingOf, recheck, afterFailures });
+    if (!res || res.next === res.was) return;
+    await ac.setWhitelist(res.next);
+    await track({
+      kind: "whitelist",
+      state: res.next ? "on" : "off",
+      foreign_ok: res.check.foreignOk,
+      foreign_total: res.check.foreignTotal,
+      domestic_ok: res.check.domesticOk,
+      domestic_total: res.check.domesticTotal,
+      ms: res.check.ms,
+    });
+    if (!res.next) {
+      await Promise.resolve(ext.alarms.clear(WHITELIST_ALARM)).catch(() => {});
+      return;
+    }
+    ext.alarms.create(WHITELIST_ALARM, { periodInMinutes: ac4.RECHECK_MS / 60000 });
+    if (res.flagged > 0 && afterFailures) {
+      const { connection } = await load(["connection"]);
+      if (connection && !connection.on && !connection.blocking && (!connection.serverId || connection.serverId === "auto")) await connect("auto");
+    }
+  } catch {
+    // a check must never break anything else
+  }
 }
 
 // --- usage statistics ------------------------------------------------------------

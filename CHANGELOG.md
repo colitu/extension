@@ -4,6 +4,16 @@ All notable changes to the Colitu VPN browser extension. Release notes in
 Russian, English and Turkish are also at
 <https://docs.colitu.com/changelog/browser>.
 
+## 1.5.0
+
+- **Adaptive Connect 4, smarter automatic choice:** the automatic server is picked with a small decision model that runs in the extension. The history of your own network stays in the browser and is never sent; anonymous results from other devices in your city are updated every hour. Without the model the extension keeps the earlier rules.
+- **An honest server list:** servers that fail twice in a row from your network are hidden (never the connected or selected one, and nothing is hidden when most servers fail). Pings are shown while connected too.
+- **Recommended servers** come first in their country, with a badge.
+- **Whitelist detection:** if your operator only lets approved sites through, the extension notices and switches to a server that works.
+- A server you choose yourself is never changed.
+- The server list is refreshed every 30 minutes, so servers that were removed leave the list sooner.
+- Device registration sends the extension's installation key, so one installation keeps one free account.
+
 ## 1.4.5
 
 - **Store and package texts:** the description now states the current free plan, 1 GB a month (it said 10 GB). No change to how the extension works.

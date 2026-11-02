@@ -362,6 +362,11 @@ export function sanitizeServers(list) {
       host,
       port,
       load: s.load === "medium" || s.load === "high" ? s.load : "low",
+      // AC4: the panel marks servers it recommends; first inside their country.
+      recommended: s.recommended === true,
+      // AC4 phase 3: the entry address works under mobile operators' whitelists.
+      // Default off when the panel does not send it to the extension.
+      whitelist_ok: s.whitelist_ok === true,
       categories: Array.isArray(s.categories) ? s.categories.slice(0, 8).map((c) => String(c).slice(0, 40)) : undefined,
     });
   }
@@ -466,7 +471,35 @@ export async function acEvents(payload) {
 export async function networkToken() {
   const data = await authorized("/servers", { timeout: 10000 });
   const token = data && typeof data.network_token === "string" ? data.network_token : "";
-  return token.length <= 128 ? token : "";
+  return token.length <= 256 ? token : "";
+}
+
+// serversMeta: the parts of GET /servers that Adaptive Connect 4 needs: the rollout
+// switch (features.ac_engine_4), the network's country and key (client_country,
+// client_network; empty when unknown), the whitelist control hosts, the servers the
+// panel hints as blocked on this network, and the signed network token. Fields the
+// panel does not send come back null / empty.
+export async function serversMeta() {
+  const data = await authorized("/servers", { timeout: 10000 });
+  const d = data && typeof data === "object" ? data : {};
+  const hints = d.network_hints && typeof d.network_hints === "object" ? d.network_hints : null;
+  return {
+    features: d.features && typeof d.features === "object" ? d.features : null,
+    country: typeof d.client_country === "string" ? d.client_country : "",
+    network: typeof d.client_network === "string" ? d.client_network.slice(0, 64) : "",
+    probe: d.whitelist_probe,
+    hinted: hints && Array.isArray(hints.blocked_servers) ? hints.blocked_servers.filter((x) => typeof x === "string").slice(0, 200) : null,
+    token: typeof d.network_token === "string" && d.network_token.length <= 256 ? d.network_token : "",
+  };
+}
+
+// acModel: the Adaptive Connect 4 decision model (GET /client/ac-model, same auth as
+// the other client calls). Through the proxy the panel takes the country (and city)
+// from the signed network token (at most 256 characters) of the last /servers fetched
+// with the VPN off; pass it while the proxy is on.
+export async function acModel(networkToken) {
+  const path = networkToken ? `/client/ac-model?network_token=${encodeURIComponent(networkToken)}` : "/client/ac-model";
+  return authorized(path, { timeout: 15000 });
 }
 
 // activateDevice makes this browser the active device when the plan's device

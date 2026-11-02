@@ -116,21 +116,34 @@ async function noticeCall(cmd, extra = {}) {
   renderNotice();
 }
 
+// AC4 whitelist mode: a notice of the extension itself, shown while no panel notice is.
+let whitelistDismissed = false;
+function localNotice() {
+  const wl = state && state.whitelist;
+  if (!wl || !wl.on) {
+    whitelistDismissed = false;
+    return null;
+  }
+  if (whitelistDismissed) return null;
+  return { id: "local:whitelist", level: "warning", title: "", body: t(wl.flagged > 0 ? "whitelistOn" : "whitelistNone"), button: null, url: null };
+}
+
 function renderNotice() {
   const el = $("notice");
-  if (!notice) {
+  const shown = notice || localNotice();
+  if (!shown) {
     el.hidden = true;
     return;
   }
-  el.className = "notice " + notice.level;
-  $("notice-title").textContent = notice.title;
-  $("notice-title").hidden = !notice.title;
-  $("notice-body").textContent = notice.body;
-  $("notice-body").hidden = !notice.body;
+  el.className = "notice " + shown.level;
+  $("notice-title").textContent = shown.title;
+  $("notice-title").hidden = !shown.title;
+  $("notice-body").textContent = shown.body;
+  $("notice-body").hidden = !shown.body;
   const btn = $("notice-btn");
-  const link = notice.button && notice.url && isColituUrl(notice.url);
+  const link = shown.button && shown.url && isColituUrl(shown.url);
   btn.hidden = !link;
-  btn.textContent = link ? notice.button : "";
+  btn.textContent = link ? shown.button : "";
   el.hidden = false;
 }
 
@@ -297,7 +310,7 @@ function pingClass(ms) {
 }
 
 function pingText(ms) {
-  return typeof ms === "number" ? `${ms} ms` : "";
+  return typeof ms === "number" ? `${ms} ms` : "— ms";
 }
 
 // --- rendering ----------------------------------------------------------------
@@ -394,6 +407,7 @@ function render() {
   renderGrowth();
   renderNps();
   renderPaused();
+  renderNotice();
   renderSettings();
   if (view === "servers") renderServers();
   show(view);
@@ -621,7 +635,7 @@ function renderPaused() {
   $("paused-text").textContent = state.paused ? pausedText(state.paused, state.paused.deviceId) : "";
 }
 
-function serverButton({ id, cc, title, sub, ms, tags, current }) {
+function serverButton({ id, cc, title, sub, ms, tags, current, recommended }) {
   const li = document.createElement("li");
   const b = document.createElement("button");
   b.type = "button";
@@ -637,10 +651,16 @@ function serverButton({ id, cc, title, sub, ms, tags, current }) {
   const small = document.createElement("small");
   small.textContent = sub;
   text.append(strong, small);
-  if (tags && tags.length) {
+  if ((tags && tags.length) || recommended) {
     const wrap = document.createElement("span");
     wrap.className = "tags";
-    for (const tag of tags) {
+    if (recommended) {
+      const badge = document.createElement("span");
+      badge.className = "tag recommended";
+      badge.textContent = t("recommended");
+      wrap.append(badge);
+    }
+    for (const tag of tags || []) {
       const label = Object.hasOwn(TAGS, tag) ? TAGS[tag] : null;
       if (!label) continue;
       const el = document.createElement("span");
@@ -652,7 +672,7 @@ function serverButton({ id, cc, title, sub, ms, tags, current }) {
   }
   const ping = document.createElement("span");
   ping.className = pingClass(ms);
-  ping.textContent = pingText(ms);
+  ping.textContent = id === "auto" && typeof ms !== "number" ? "" : pingText(ms);
   b.append(img, text, ping);
   b.addEventListener("click", async () => {
     show("main");
@@ -669,12 +689,16 @@ function renderServers() {
   const q = $("in-search").value.trim().toLocaleLowerCase(language());
   const selected = state.connection.serverId || "auto";
   if (!q) list.append(serverButton({ id: "auto", cc: "", title: t("fastest"), sub: autoSub(), ms: state.auto ? state.auto.ms : undefined, current: selected === "auto" }));
+  // Servers that failed two ping rounds with the proxy off are hidden (never the selected one).
+  const hidden = new Set((state.hidden || []).map(String));
   const rows = servers
+    .filter((s) => !hidden.has(String(s.id)) || s.id === selected)
     .map((s) => ({ s, name: countryName(s.country), city: cityName(s.city) }))
     .filter((x) => !q || `${x.name} ${x.city} ${x.s.country}`.toLocaleLowerCase(language()).includes(q))
-    .sort((a, b) => a.name.localeCompare(b.name, language()));
+    // By country; inside a country the recommended servers come first.
+    .sort((a, b) => a.name.localeCompare(b.name, language()) || Number(b.s.recommended === true) - Number(a.s.recommended === true));
   for (const x of rows) {
-    list.append(serverButton({ id: x.s.id, cc: x.s.country, title: x.name, sub: x.city, ms: state.pings[x.s.id], tags: x.s.categories, current: selected === x.s.id }));
+    list.append(serverButton({ id: x.s.id, cc: x.s.country, title: x.name, sub: x.city, ms: state.pings[x.s.id], tags: x.s.categories, current: selected === x.s.id, recommended: x.s.recommended === true }));
   }
   if (!servers.length) {
     const li = document.createElement("li");
@@ -728,6 +752,10 @@ function wire() {
   });
   $("notice-close").addEventListener("click", () => {
     if (notice) noticeCall("notice-dismiss", { id: notice.id });
+    else {
+      whitelistDismissed = true;
+      renderNotice();
+    }
   });
   $("btn-link-open").addEventListener("click", () => state && state.link && isColituUrl(state.link.url) && ext.tabs.create({ url: state.link.url }));
   $("btn-link-cancel").addEventListener("click", () => run("link-cancel"));
@@ -938,7 +966,7 @@ function wire() {
   ext.storage.onChanged.addListener((changes, area) => {
     // Tokens live in session memory (store.js): a sign-in changes only them.
     if (area === "session" ? !("authTokens" in changes) : area !== "local") return;
-    if (["authTokens", "auth", "session", "connection", "status", "link", "pings", "settings", "entitlement", "paused"].some((k) => k in changes)) refreshQuiet();
+    if (["authTokens", "auth", "session", "connection", "status", "link", "pings", "reach", "settings", "entitlement", "paused"].some((k) => k in changes)) refreshQuiet();
   });
 }
 

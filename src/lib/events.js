@@ -65,6 +65,22 @@ const int = (v, max) => {
 // (unknown kind, node id that is not a lower-case UUID).
 export function sanitize(event) {
   if (!event || typeof event !== "object") return null;
+  // AC4 whitelist mode entered or left: no node, stored per country + provider only.
+  if (event.kind === "whitelist") {
+    const total = (v) => {
+      const n = int(v, 10);
+      return n !== null && n >= 1 ? n : null;
+    };
+    const fo = int(event.foreign_ok, 10);
+    const ft = total(event.foreign_total);
+    const dok = int(event.domestic_ok, 10);
+    const dt = total(event.domestic_total);
+    if ((event.state !== "on" && event.state !== "off") || fo === null || ft === null || dok === null || dt === null || fo > ft || dok > dt) return null;
+    const out = { kind: "whitelist", state: event.state, foreign_ok: fo, foreign_total: ft, domestic_ok: dok, domestic_total: dt };
+    const ms = int(event.ms, 600000);
+    if (ms !== null) out.ms = ms;
+    return out;
+  }
   const node = String(event.node_id || "").toLowerCase();
   if (!UUID.test(node)) return null;
   const out = { kind: event.kind, node_id: node, protocol: PROTOCOL };

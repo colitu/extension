@@ -219,3 +219,11 @@ export function routeName(raw, lang) {
   if (!text.includes("→")) return displayName(text, lang);
   return text.split("→").map((part) => displayName(part, lang)).join(" → ");
 }
+
+// isBridgeName: the name ends in the bridge suffix in any language ("Letonya
+// (Köprü)", "Латвия (Мост)", "Latvia (Bridge)"): a node whose entry address is
+// in Russia and whose traffic leaves abroad (its country is the exit's).
+export function isBridgeName(raw) {
+  const m = /^(.*?)\s*\(([^()]*)\)$/.exec(String(raw ?? "").trim());
+  return Boolean(m && m[1].trim() && suffixIndex.has(normalize(m[2].trim())));
+}

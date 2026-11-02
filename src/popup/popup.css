@@ -155,6 +155,7 @@ textarea { resize: vertical; min-height: 64px; font-family: ui-monospace, SFMono
 .list li button:hover, .list li button:focus-visible { background: var(--panel-2); outline: none; }
 .list li button[aria-current="true"] { background: rgba(124, 108, 255, 0.14); }
 .tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 2px; }
+.tag.recommended { background: rgba(124, 108, 255, 0.18); color: var(--text); }
 .tag { font-size: 10.5px; padding: 1px 6px; border-radius: 999px; background: var(--panel-2); color: var(--muted); }
 .empty { padding: 30px 10px; text-align: center; color: var(--faint); }
 
