@@ -18,6 +18,10 @@ import { displayName } from "./lib/servernames.js";
 import { pickSiteServer } from "./lib/site.js";
 
 const REFRESH_ALARM = "colitu-session";
+// The server list comes with the ticket, which may be refreshed only every
+// couple of hours; a server the panel dropped (shut down, unreachable) must
+// leave the list sooner than that: at the next REFRESH_ALARM (30 min).
+const SERVER_LIST_MAX_AGE_MS = 25 * 60 * 1000;
 const LINK_ALARM = "colitu-link";
 const LATENCY_ALARM = "colitu-latency";
 // While traffic is held back for a new proxy ticket (holdForTicket), the
@@ -537,7 +541,9 @@ async function pollLink() {
 async function refreshIfDue() {
   const { session, auth } = await load(["session", "auth"]);
   if (!auth || !auth.deviceId) return;
-  if (!session || !session.ticket || Date.now() >= session.refreshAt) await refreshSession();
+  if (!session || !session.ticket || Date.now() >= session.refreshAt) return refreshSession();
+  const { paused } = await load(["paused"]);
+  if (!paused && !sessionInFlight && !(Date.now() - (session.fetchedAt || 0) < SERVER_LIST_MAX_AGE_MS)) await refreshSession({ reapply: false });
 }
 
 let sessionInFlight = null;
